@@ -22,7 +22,7 @@ import ecoster
 # import parsera ramek sterownika EcoMax860p z pliku ecomax860p.py
 # jeśli masz inny sterownik - napisz do niego swoją bibliotekę wzorując się na poniższej i podmień import np. import ecomax350 as ecomax
 # jednocześnie może być zaimportowana tylko jedna biblioteka o nazwie lub aliasie ecomax
-import ecomax860p as ecomax
+import ecomax850p2 as ecomax
 
 
 #ŹRÓDŁO DANYCH
