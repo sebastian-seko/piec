@@ -1,7 +1,3 @@
-# Analizator EcoNet
-# (C) 2020 Tomasz Król https://github.com/twkrol/econetanalyze
-# Gwarancji żadnej nie daję. Ale można korzystać do woli i modyfikować wg potrzeb
-
 #ecoMAX 850 P2
 import struct
 
@@ -115,7 +111,7 @@ def parseFrame08(message):
     #Moc kotła
     #moc = message[BOILER_POWER_byte]
     #print(f"Moc kotła: {moc:d}%")    
-    #ogien
+    #ogien blędne dane
     flame = message[FLAME_bytes]
     print(f"flame: {flame:d}%")
     print ("ustawienia serwisowe")
