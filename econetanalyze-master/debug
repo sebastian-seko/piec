@@ -1,0 +1,5 @@
+    # filename_message = "/data/message.txt"
+    # file_message = open(filename_message, 'w')
+    # str_message = "%s" % (message)
+    # file_message.write(str_message)
+    # file_message.close()

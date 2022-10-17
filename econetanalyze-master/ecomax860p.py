@@ -2,10 +2,9 @@
 # (C) 2020 Tomasz Król https://github.com/twkrol/econetanalyze
 # Gwarancji żadnej nie daję. Ale można korzystać do woli i modyfikować wg potrzeb
 
-#ecoMAX 850 P2
 import struct
 
-print("Zaimportowano bibliotekę sterownika EcoMax850P2")
+print("Zaimportowano bibliotekę sterownika EcoMax860P")
 filename = "/data/odczyty.txt"
 #outfile = open(filename, 'w')
 
@@ -16,19 +15,20 @@ def parseFrame(message):
     else:
         print(f"Parser EcoMax: Nieznany typ ramki 0x{message[0]:02X}")
 
-# funkcja parsująca ramkę typu 0x08 sterownika EcoMax850P2
+# funkcja parsująca ramkę typu 0x08 sterownika EcoMax860P
 def parseFrame08(message):
-    #mapa komunikatu stanu ze sterownika pieco EcoMax850P2 Red
+    #mapa komunikatu stanu ze sterownika pieco EcoMax860P Lazar SmartFire
     # typ ramki = 0x08          #[0]
     OPERATING_STATUS_byte = 27  #[33] seko
     TEMP_CWU_float = 76         #[74-77] seko
-    TEMP_TORCH_float = 84      #[78-81] sekoi
+    TEMP_FEEDER_float = 84      #[78-81] sekoi
     TEMP_CO_float = 80          #[82-85] seko
     #TEMP_BURNER_float = 84
     TEMP_WEATHER_float = 92     #[90-93] seko
-    #TEMP_EXHAUST_float = 94     #[94-97]
+    TEMP_EXHAUST_float = 94     #[94-97]
     TEMP_MIXER_float = 88      #[106-109] seko
     TEMP_MIXER_SET_byte = 156      #[106-109] seko
+    FUEL_STREAM_float = 249
     #pompa-stany 4B
     #pompa-nastawy 4B
     #numT 1B
@@ -39,11 +39,11 @@ def parseFrame08(message):
     #statusCWU 1B
     #alarmsNo 1B  #[187]
     #iloczyn alarmsNo * 1B
-    #FUEL_LEVEL_byte=189         #[189]
-    FLAME_bytes = 250
+    FUEL_LEVEL_byte=189         #[189]
+    FLAME_bytes = 36            #seko
     #transmission_BYTE=190
     #fanPower_FLOAT=191-194
-    #BOILER_POWER_byte=196       #[196]
+    BOILER_POWER_byte=196       #[196]
     #boilerPowerKW_FLOAT=197-200
     #fuelStream=201-204
     #thermostat=205
@@ -55,7 +55,7 @@ def parseFrame08(message):
     #modulePanelSoftVer=221-223
     #lambdaStatus=224
     #lambdaSet=225
-    #LAMBDA_LEVEL_float=226      #[226-229]
+    LAMBDA_LEVEL_float=226      #[226-229]
     #OXYGEN_float = 230          #[230-233]
     POWER100_TIME_short = 255   #[235-236] seko
     POWER50_TIME_short = 257    #[237-238] seko
@@ -65,7 +65,7 @@ def parseFrame08(message):
     AIRFLOW_percent_byte = 245          #seko
 
     #OPERATION_STATUSES = {0:'WYŁĄCZONY', 1:'ROZPALANIE', 2:'STABILIZACJA', 3:'PRACA', 4:'NADZÓR', 5:'WYGASZANIE', 6:'POSTÓJ', 7:'WYGASZANIE NA ŻĄDANIE', 9:'ALARM', 10:'ROZSZCZELNIENIE'}
-    OPERATION_STATUSES = {0:'WYŁĄCZONY', 1:'ROZPALANIE', 2:'PRACA', 4:'WYGASZANIE', 5:'POSTÓJ' , 8:'CZYSZCZENIE'}
+    OPERATION_STATUSES = {0:'WYŁĄCZONY', 1:'ROZPALANIE', 2:'PRACA', 4:'WYGASZANIE', 5:'POSTÓJ' , 7:'ALARM', 8:'CZYSZCZENIE'}
     print("")
 
     #Stan pieca [33]
@@ -96,8 +96,12 @@ def parseFrame08(message):
     #tempSpalin = struct.unpack("f", bytes(message[TEMP_EXHAUST_float:TEMP_EXHAUST_float+4]))[0]
     #print(f"Temperatura spalin: {tempSpalin:.1f}")
 
+    #strumien paliwa
+    fuelStream= struct.unpack("f", bytes(message[FUEL_STREAM_float:FUEL_STREAM_float+4]))[0]
+    print(f"Strumien paliwa: {fuelStream:.1f}")
+
     #Temperatura podajnika
-    tempPodajnika = struct.unpack("f", bytes(message[TEMP_TORCH_float:TEMP_TORCH_float+4]))[0]
+    tempPodajnika = struct.unpack("f", bytes(message[TEMP_FEEDER_float:TEMP_FEEDER_float+4]))[0]
     print(f"Temperatura palnika: {tempPodajnika:.1f}")
 
     #Tlen
@@ -115,9 +119,10 @@ def parseFrame08(message):
     #Moc kotła
     #moc = message[BOILER_POWER_byte]
     #print(f"Moc kotła: {moc:d}%")    
-    #ogien
-    flame = message[FLAME_bytes]
-    print(f"flame: {flame:d}%")
+    #ogien 
+    flame_val = message[FLAME_bytes] # nie działa prawidłowo
+    print(f"flame: {flame_val} %")
+
     print ("ustawienia serwisowe")
     POWER100_TIME_short_val = struct.unpack("h", bytes(message[POWER100_TIME_short:POWER100_TIME_short+2]))[0]
     print(f"Praca MAX: {POWER100_TIME_short_val}h")
