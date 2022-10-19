@@ -25,6 +25,7 @@ def parseFrame08(message):
     #TEMP_EXHAUST_float = 94     #[94-97]
     TEMP_MIXER_float = 88      #[106-109] seko
     TEMP_MIXER_SET_byte = 156      #[106-109] seko
+    FUEL_STREAM_float = 249
     #pompa-stany 4B
     #pompa-nastawy 4B
     #numT 1B
@@ -36,7 +37,7 @@ def parseFrame08(message):
     #alarmsNo 1B  #[187]
     #iloczyn alarmsNo * 1B
     #FUEL_LEVEL_byte=189         #[189]
-    FLAME_bytes = 250
+    FLAME_bytes = 36            #seko
     #transmission_BYTE=190
     #fanPower_FLOAT=191-194
     #BOILER_POWER_byte=196       #[196]
@@ -61,7 +62,7 @@ def parseFrame08(message):
     AIRFLOW_percent_byte = 245          #seko
 
     #OPERATION_STATUSES = {0:'WYŁĄCZONY', 1:'ROZPALANIE', 2:'STABILIZACJA', 3:'PRACA', 4:'NADZÓR', 5:'WYGASZANIE', 6:'POSTÓJ', 7:'WYGASZANIE NA ŻĄDANIE', 9:'ALARM', 10:'ROZSZCZELNIENIE'}
-    OPERATION_STATUSES = {0:'WYŁĄCZONY', 1:'ROZPALANIE', 2:'PRACA', 4:'WYGASZANIE', 5:'POSTÓJ' , 8:'CZYSZCZENIE'}
+    OPERATION_STATUSES = {0:'WYŁĄCZONY', 1:'ROZPALANIE', 2:'PRACA', 4:'WYGASZANIE', 5:'POSTÓJ' , 7:'ALARM', 8:'CZYSZCZENIE'}
     print("")
 
     #Stan pieca [33]
@@ -91,6 +92,10 @@ def parseFrame08(message):
     #Temperatura spalin
     #tempSpalin = struct.unpack("f", bytes(message[TEMP_EXHAUST_float:TEMP_EXHAUST_float+4]))[0]
     #print(f"Temperatura spalin: {tempSpalin:.1f}")
+
+    #strumien paliwa
+    fuelStream= struct.unpack("f", bytes(message[FUEL_STREAM_float:FUEL_STREAM_float+4]))[0]
+    print(f"Strumien paliwa: {fuelStream:.1f}")
 
     #Temperatura podajnika
     tempPodajnika = struct.unpack("f", bytes(message[TEMP_TORCH_float:TEMP_TORCH_float+4]))[0]
@@ -137,3 +142,9 @@ def parseFrame08(message):
     results = "%s, %s, %s, %s, %s, %s, %s, %s, %s" % (tempCWU,tempCO,tempPogodowa,tempPodajnika,tempMieszacza,OP,TEMP_CO_SET_byte_val,TEMP_CWU_SET_byte_val,TEMP_MIXER_SET_byte_val)
     outfile.write(results)
     outfile.close()
+
+    filename_message = "/data/message.txt"
+    file_message = open(filename_message, 'w')
+    str_message = "%s" % (message)
+    file_message.write(str_message)
+    file_message.close()
