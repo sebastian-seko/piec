@@ -1,0 +1,11 @@
+  [Unit]
+  Description=Piec to file provider
+
+  [Service]
+  Restart=always
+  User=root
+  WorkingDirectory=/home/pi/econetanalyze-master
+  ExecStart=/bin/sh /home/pi/econetanalyze-master/entrypoint.sh
+
+  [Install]
+  WantedBy=multi-user.target

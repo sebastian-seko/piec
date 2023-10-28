@@ -1,7 +1,8 @@
      <?php
 
 	 $page = $_SERVER['PHP_SELF'];
-$sec = "10";
+     $sec = "10";
+     $myAudioFile = "625msljet.wav";
 
    
 	
@@ -29,6 +30,15 @@ $sec = "10";
     echo "Stan = ";
 	print  $stan; 
 	echo "<br>";
+    if ($stan == ' ROZPALANIE') {
+        echo '<body style="background-color:orange">';
+        // echo '<EMBED SRC="'.$myAudioFile.'" HIDDEN="TRUE" AUTOSTART="TRUE"></EMBED>';
+        echo '<audio src="625msljet.wav" autoplay="true" loop="loop">';
+        } else {
+        echo '<body style="background-color:white">';
+        // echo '<EMBED SRC="'.$myAudioFile.'" HIDDEN="TRUE" AUTOSTART="FALSE"></EMBED>';
+        echo '<audio src="625msljet.wav" autoplay="false" loop="loop">';
+        }
     $temperature1 = $matches1[2];
 	$temperature1=round($temperature1,2);
     // Output the temperature

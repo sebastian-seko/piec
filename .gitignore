@@ -1,5 +1,6 @@
+raw.txt
 *.log
-*.out
-__pycache__
 *.hex
-*.save
+*.out
+*.txt
+625msljet.wav
