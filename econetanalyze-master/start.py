@@ -50,7 +50,8 @@ RAMKA_START = 0x68
 RAMKA_STOP = 0x16
 NADAWCA_ECONET = 0x56
 NADAWCA_ECOMAX = 0x45         #piec pelletowy
-NADAWCA_ECOSTER = 0x51        #panel dotykowy
+#NADAWCA_ECOSTER = 0x51        #panel dotykowy original
+NADAWCA_ECOSTER = 0x50        #panel dotykowy
 NADAWCA_TYP_ECONET = 0x30
 # ODBIORCA_BROADCAST = 0x00
 

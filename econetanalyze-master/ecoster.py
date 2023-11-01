@@ -32,18 +32,34 @@ def parseFrame89(message):
     # nazwa panelu                #[33-n]
     # zero jako koniec nazwy      #[n+1]
     #                             #[n+2-koniec]  
-
+    HOURS_byte = 5
+    MINUTE_byte = 6
+    SECOUND_byte = 7
+    YEAR_short = 8
+    MOUNT_byte = 10
+    DAY_byte = 11
     print("")
 
     #Temperatura domowa zadana [17-20]
-    tempDomSet = struct.unpack("f", bytes(message[TEMP_HOME_SET_FLOAT:TEMP_HOME_SET_FLOAT+4]))[0]
-    print(f"Temperatura pokojowa zadana: {tempDomSet:.1f}")
+    # tempDomSet = struct.unpack("f", bytes(message[TEMP_HOME_SET_FLOAT:TEMP_HOME_SET_FLOAT+4]))[0]
+    # print(f"Temperatura pokojowa zadana: {tempDomSet:.1f}")
 
-    #Temperatura domowa bieżąca [21-24]
-    tempDomCurr = struct.unpack("f", bytes(message[TEMP_HOME_CURR_FLOAT:TEMP_HOME_CURR_FLOAT+4]))[0]
-    print(f"Temperatura pokojowa bieżąca: {tempDomCurr:.1f}")
+    # #Temperatura domowa bieżąca [21-24]
+    # tempDomCurr = struct.unpack("f", bytes(message[TEMP_HOME_CURR_FLOAT:TEMP_HOME_CURR_FLOAT+4]))[0]
+    # print(f"Temperatura pokojowa bieżąca: {tempDomCurr:.1f}")
 
     #Temperatura x [25-28]
     # tempx = struct.unpack("f", bytes(message[25:25+4]))[0]
     # print(f"Temperatura x: {tempx:.1f}")
-
+    HOURS_byte_val = message[HOURS_byte]
+    print(f"Godzina: {HOURS_byte_val}")
+    MINUTE_byte_val = message[MINUTE_byte]
+    print(f"Minuta: {MINUTE_byte_val}")
+    SECOUND_byte_val = message[SECOUND_byte]
+    print(f"Minuta: {SECOUND_byte_val}")
+    YEAR_short_val = struct.unpack("h", bytes(message[YEAR_short:YEAR_short+2]))[0]
+    print(f"Rok: {YEAR_short_val}")
+    MOUNT_byte_val = message[MOUNT_byte]
+    print(f"Miesiac: {MOUNT_byte_val}")
+    DAY_byte_val = message[DAY_byte]
+    print(f"Dzien: {DAY_byte}")
