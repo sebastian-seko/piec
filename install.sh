@@ -11,7 +11,8 @@ mkdir -p "$DATA_DIR"
 
 if [ -d "$INSTALL_DIR/.git" ]; then
     echo "==> Aktualizacja repozytorium w $INSTALL_DIR..."
-    git -C "$INSTALL_DIR" pull
+    git -C "$INSTALL_DIR" fetch origin
+    git -C "$INSTALL_DIR" reset --hard origin/main
 else
     echo "==> Klonowanie repozytorium z $REPO_URL..."
     git clone "$REPO_URL" "$INSTALL_DIR"
