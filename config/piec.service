@@ -1,0 +1,15 @@
+[Unit]
+Description=Piec to file provider
+After=network.target
+
+[Service]
+Restart=always
+RestartSec=5
+User=root
+WorkingDirectory=/home/pi/piec/src
+ExecStart=/usr/bin/python3 /home/pi/piec/src/start.py
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
