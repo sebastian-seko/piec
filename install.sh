@@ -17,8 +17,17 @@ else
     git clone "$REPO_URL" "$INSTALL_DIR"
 fi
 
+echo "==> Instalacja zależności Python..."
+apt-get install -y python3-serial
+
 echo "==> Instalacja pliku usługi systemd..."
 cp "$INSTALL_DIR/config/piec.service" "$SERVICE_FILE"
+
+echo "==> Kopiowanie plików web do /var/www/html..."
+cp -r "$INSTALL_DIR/web/." /var/www/html/
+
+echo "==> Restart Apache..."
+systemctl restart apache2
 
 echo "==> Przeładowanie konfiguracji systemd..."
 systemctl daemon-reload
