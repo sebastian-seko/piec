@@ -38,7 +38,7 @@ if ! mountpoint -q "$MOUNT_POINT"; then
         apt-get install -y cifs-utils
     fi
     mount -t cifs "$SHARE" "$MOUNT_POINT" \
-        -o "credentials=${CREDENTIALS_FILE},uid=pi,gid=pi,iocharset=utf8"
+        -o "credentials=${CREDENTIALS_FILE},uid=pi,gid=pi,iocharset=utf8,vers=1.0"
     echo "    Zamontowano $SHARE -> $MOUNT_POINT"
 else
     echo "==> $MOUNT_POINT jest już zamontowany"
