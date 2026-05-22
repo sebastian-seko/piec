@@ -6,6 +6,15 @@ INSTALL_DIR=/home/pi/piec
 SERVICE_FILE=/etc/systemd/system/piec.service
 DATA_DIR=/data
 FSTAB_ENTRY="tmpfs ${DATA_DIR} tmpfs defaults,size=1m,noatime 0 0"
+SKIP_DEPS=0
+
+# Parsowanie argumentów
+for arg in "$@"; do
+    case $arg in
+        --skip-deps|-s) SKIP_DEPS=1 ;;
+        *) echo "Nieznany argument: $arg"; echo "Użycie: $0 [--skip-deps|-s]"; exit 1 ;;
+    esac
+done
 
 # Sprawdzenie uprawnień root
 if [ "$(id -u)" -ne 0 ]; then
@@ -14,9 +23,13 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # Instalacja wymaganych pakietów systemowych
-echo "==> Instalacja zależności systemowych..."
-apt-get update -qq
-apt-get install -y git python3 python3-serial apache2 libapache2-mod-php
+if [ "$SKIP_DEPS" -eq 1 ]; then
+    echo "==> Pomijanie instalacji zależności (--skip-deps)"
+else
+    echo "==> Instalacja zależności systemowych..."
+    apt-get update -qq
+    apt-get install -y git python3 python3-serial apache2 libapache2-mod-php
+fi
 
 # Konfiguracja /data/ jako tmpfs (1 MB w RAM)
 echo "==> Konfiguracja /data/ jako tmpfs (1 MB)..."
