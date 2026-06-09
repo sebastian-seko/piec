@@ -8,8 +8,9 @@ RestartSec=5
 User=root
 WorkingDirectory=/home/pi/piec/src
 ExecStart=/usr/bin/python3 /home/pi/piec/src/start.py
-StandardOutput=journal
-StandardError=journal
-
+#StandardOutput=journal
+#StandardError=journal
+StandardOutput=null
+StandardError=null
 [Install]
 WantedBy=multi-user.target
