@@ -1,10 +1,143 @@
 #ecoMAX 850 P2
 import struct
 import json
+import os
+import time
 from datetime import datetime
 
 print("Zaimportowano bibliotekę sterownika EcoMax850P2")
 filename = "/data/odczyty.txt"
+
+# --- Zrzut ramek przy alarmie -------------------------------------------------
+# Gdy stan (bajt 27) = 7 (ALARM), zapisujemy ramke z alarmem oraz ostatnia ramke
+# sprzed alarmu - z roznicy widac, gdzie siedza licznik i kody alarmow.
+# Kazdy alarm to osobny plik na karcie SD (nie w /data = tmpfs), wiec historia
+# przetrwa restart, a zapis nie przepisuje calej historii za kazdym razem.
+# Zapis na SD: przy starcie i koncu alarmu oraz max co ALARM_ZAPIS_CO s w trakcie.
+ALARM_KATALOG = "/home/pi/piec_dane/alarmy"
+ALARM_STAN = 7
+ALARM_MAX_PLIKOW = 5000     # ~kilkanascie KB na alarm -> max rzedu 100 MB
+ALARM_MAX_ROZNIC = 300
+ALARM_ZAPIS_CO = 60         # sekund miedzy zapisami w trakcie trwania alarmu
+
+_ostatnia_normalna = None   # (timestamp, ramka) ostatniej ramki bez alarmu
+_epizod = None              # biezacy / ostatni epizod alarmu (dict)
+_w_alarmie = False
+_ostatni_zapis = 0.0
+
+
+def _roznice(przed, teraz):
+    out = []
+    for i in range(min(len(przed), len(teraz))):
+        if przed[i] != teraz[i]:
+            out.append({"bajt": i, "przed": przed[i], "alarm": teraz[i]})
+            if len(out) >= ALARM_MAX_ROZNIC:
+                break
+    return out
+
+
+def _pliki_alarmow():
+    try:
+        return sorted(f for f in os.listdir(ALARM_KATALOG)
+                      if f.startswith("alarm_") and f.endswith(".json"))
+    except FileNotFoundError:
+        return []
+
+
+def _zapisz_epizod(ep):
+    global _ostatni_zapis
+    _ostatni_zapis = time.monotonic()
+    sciezka = os.path.join(ALARM_KATALOG, ep["plik"])
+    tmp = sciezka + ".tmp"
+    try:
+        os.makedirs(ALARM_KATALOG, exist_ok=True)
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(ep, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, sciezka)
+    except (OSError, TypeError, ValueError) as e:
+        print(f"Błąd zapisu pliku {sciezka}: {e}")
+
+
+def _sprzataj_stare():
+    pliki = _pliki_alarmow()
+    for f in pliki[:-ALARM_MAX_PLIKOW]:
+        try:
+            os.remove(os.path.join(ALARM_KATALOG, f))
+        except OSError:
+            pass
+
+
+def _nazwa_pliku(ts):
+    baza = "alarm_" + ts.replace(":", "-").replace("T", "_")
+    nazwa, n = baza + ".json", 1
+    while os.path.exists(os.path.join(ALARM_KATALOG, nazwa)):
+        n += 1
+        nazwa = f"{baza}_{n}.json"
+    return nazwa
+
+
+def _wczytaj_alarmy():
+    """Przy starcie uslugi zamyka alarm, ktory trwal w chwili restartu."""
+    pliki = _pliki_alarmow()
+    if not pliki:
+        return
+    sciezka = os.path.join(ALARM_KATALOG, pliki[-1])
+    try:
+        with open(sciezka, encoding='utf-8') as f:
+            ep = json.load(f)
+    except (OSError, ValueError) as e:
+        print(f"Nie można wczytać {sciezka}: {e}")
+        return
+    if isinstance(ep, dict) and ep.get("koniec") is None:
+        ep["koniec"] = "przerwany (restart usługi)"
+        ep["plik"] = pliki[-1]
+        _zapisz_epizod(ep)
+
+
+def sledz_alarm(message):
+    global _ostatnia_normalna, _w_alarmie, _epizod
+    if len(message) <= 27:
+        return
+    teraz = datetime.now().isoformat(timespec="seconds")
+    ramka = list(message)
+
+    if message[27] != ALARM_STAN:
+        if _w_alarmie and _epizod is not None:
+            _epizod["koniec"] = teraz
+            _zapisz_epizod(_epizod)
+        _w_alarmie = False
+        _ostatnia_normalna = (teraz, ramka)
+        return
+
+    if not _w_alarmie:
+        # poczatek nowego epizodu alarmu
+        _w_alarmie = True
+        przed_ts, przed = _ostatnia_normalna if _ostatnia_normalna else (None, None)
+        os.makedirs(ALARM_KATALOG, exist_ok=True)
+        _epizod = {
+            "plik": _nazwa_pliku(teraz),
+            "poczatek": teraz,
+            "koniec": None,
+            "licznik_ramek": 1,
+            "roznica_dlugosci": (len(ramka) - len(przed)) if przed else None,
+            "roznice": _roznice(przed, ramka) if przed else [],
+            "ramka_przed": {"timestamp": przed_ts, "dlugosc": len(przed) if przed else None, "ramka": przed},
+            "ramka_alarm_pierwsza": {"timestamp": teraz, "dlugosc": len(ramka), "ramka": ramka},
+            "ramka_alarm_ostatnia": {"timestamp": teraz, "dlugosc": len(ramka), "ramka": ramka},
+        }
+        _zapisz_epizod(_epizod)
+        _sprzataj_stare()
+        print(f"ALARM - zapisano {os.path.join(ALARM_KATALOG, _epizod['plik'])}")
+        return
+
+    # alarm trwa - aktualizacja w pamieci, zapis na SD co ALARM_ZAPIS_CO s
+    _epizod["licznik_ramek"] += 1
+    _epizod["ramka_alarm_ostatnia"] = {"timestamp": teraz, "dlugosc": len(ramka), "ramka": ramka}
+    if time.monotonic() - _ostatni_zapis >= ALARM_ZAPIS_CO:
+        _zapisz_epizod(_epizod)
+
+_wczytaj_alarmy()
+
 
 def parseFrame(message):
     if message[0] == 0x08:
@@ -38,6 +171,11 @@ def parseFrame08(message):
 
     OPERATION_STATUSES = {0:'WYŁĄCZONY', 1:'ROZPALANIE', 2:'PRACA', 4:'WYGASZANIE', 5:'POSTÓJ', 6:'PRACA RĘCZNA', 7:'ALARM', 8:'CZYSZCZENIE'}
     print("")
+
+    try:
+        sledz_alarm(message)
+    except Exception as e:
+        print(f"Błąd śledzenia alarmu: {e}")
 
     try:
         OP = OPERATION_STATUSES[message[OPERATING_STATUS_byte]] if message[OPERATING_STATUS_byte] in OPERATION_STATUSES else str(message[OPERATING_STATUS_byte])

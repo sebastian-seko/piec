@@ -45,6 +45,11 @@ else
     echo "    /data/ jest już zamontowany"
 fi
 
+# Katalog na dane trwale (karta SD, przetrwa restart) - np. historia alarmow
+PERSIST_DIR=/home/pi/piec_dane
+echo "==> Katalog danych trwałych: $PERSIST_DIR"
+mkdir -p "$PERSIST_DIR"
+
 # Klonowanie lub aktualizacja repozytorium
 if [ -d "$INSTALL_DIR/.git" ]; then
     echo "==> Aktualizacja repozytorium w $INSTALL_DIR..."
