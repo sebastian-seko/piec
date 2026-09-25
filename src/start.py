@@ -232,6 +232,11 @@ while True:
                 if len(ramka) > TYP_RAMKI and len(message) > 0:
                     if (ramka[ADRES_NADAWCY_BYTE], ramka[TYP_RAMKI]) not in ZNANE_RAMKI:
                         zapisz_nieznana(ramka, message)
+                        try:
+                            ecomax.zglos_inna_ramke(ramka[ADRES_NADAWCY_BYTE], ramka[ADRES_ODBIORCY_BYTE],
+                                                    ramka[TYP_RAMKI], message)
+                        except Exception as e:
+                            print(f"Błąd zapisu ramki do alarmu: {e}")
 
                 if len(ramka) > ADRES_NADAWCY_BYTE:
                     if ramka[ADRES_NADAWCY_BYTE] == NADAWCA_ECOSTER:

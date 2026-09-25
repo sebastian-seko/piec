@@ -3,6 +3,7 @@ import struct
 import json
 import os
 import time
+from collections import deque
 from datetime import datetime
 
 print("Zaimportowano bibliotekę sterownika EcoMax850P2")
@@ -20,10 +21,23 @@ ALARM_MAX_PLIKOW = 5000     # ~kilkanascie KB na alarm -> max rzedu 100 MB
 ALARM_MAX_ROZNIC = 300
 ALARM_ZAPIS_CO = 60         # sekund miedzy zapisami w trakcie trwania alarmu
 
+# Inne ramki (dowolny typ/nadawca, nieobslugiwane przez parsery) wokol alarmu:
+ALARM_PRZED_S = 120         # ile sekund przed alarmem dolaczyc z bufora
+ALARM_PO_S = 120            # ile sekund po koncu alarmu jeszcze zbierac
+ALARM_BUFOR = 200           # ile ostatnich innych ramek trzymac w pamieci
+ALARM_MAX_INNYCH = 500      # max roznych (unikalna tresc) innych ramek w pliku
+
 _ostatnia_normalna = None   # (timestamp, ramka) ostatniej ramki bez alarmu
 _epizod = None              # biezacy / ostatni epizod alarmu (dict)
 _w_alarmie = False
 _ostatni_zapis = 0.0
+_koniec_mono = None         # monotonic() konca alarmu (okno "po")
+_brudny = False             # epizod zmieniony od ostatniego zapisu
+_bufor = deque(maxlen=ALARM_BUFOR)   # (monotonic, dict ramki)
+
+
+def _bajt(message, i):
+    return message[i] if 0 <= i < len(message) else None
 
 
 def _roznice(przed, teraz):
@@ -45,8 +59,9 @@ def _pliki_alarmow():
 
 
 def _zapisz_epizod(ep):
-    global _ostatni_zapis
+    global _ostatni_zapis, _brudny
     _ostatni_zapis = time.monotonic()
+    _brudny = False
     sciezka = os.path.join(ALARM_KATALOG, ep["plik"])
     tmp = sciezka + ".tmp"
     try:
@@ -94,8 +109,68 @@ def _wczytaj_alarmy():
         _zapisz_epizod(ep)
 
 
+def _dodaj_inna(ep, wpis, faza):
+    """Dopisuje inna ramke do epizodu; powtorki tej samej tresci tylko zlicza."""
+    global _brudny
+    lista = ep.setdefault("inne_ramki", [])
+    for r in lista:
+        if (r["nadawca"], r["odbiorca"], r["typ"], r["ramka"]) == \
+           (wpis["nadawca"], wpis["odbiorca"], wpis["typ"], wpis["ramka"]):
+            r["licznik"] += 1
+            r["ostatnio"] = wpis["timestamp"]
+            if faza not in r["fazy"]:
+                r["fazy"].append(faza)
+            _brudny = True
+            return
+    if len(lista) >= ALARM_MAX_INNYCH:
+        ep["inne_ramki_pominiete"] = ep.get("inne_ramki_pominiete", 0) + 1
+        _brudny = True
+        return
+    lista.append({
+        "pierwszy_raz": wpis["timestamp"],
+        "ostatnio": wpis["timestamp"],
+        "licznik": 1,
+        "fazy": [faza],
+        "nadawca": wpis["nadawca"],
+        "odbiorca": wpis["odbiorca"],
+        "typ": wpis["typ"],
+        "dlugosc": len(wpis["ramka"]),
+        "ramka": wpis["ramka"],
+    })
+    _brudny = True
+
+
+def _zapisz_jesli_trzeba():
+    if _epizod is None or not _brudny:
+        return
+    teraz = time.monotonic()
+    okno_po_minelo = (not _w_alarmie and _koniec_mono is not None
+                      and teraz - _koniec_mono > ALARM_PO_S)
+    if okno_po_minelo or teraz - _ostatni_zapis >= ALARM_ZAPIS_CO:
+        _zapisz_epizod(_epizod)
+
+
+def zglos_inna_ramke(nadawca, odbiorca, typ, message):
+    """Wolane z start.py dla kazdej ramki, ktorej nie obsluguje zaden parser."""
+    teraz = time.monotonic()
+    wpis = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "nadawca": f"0x{nadawca:02X}",
+        "odbiorca": f"0x{odbiorca:02X}",
+        "typ": f"0x{typ:02X}",
+        "ramka": list(message),
+    }
+    _bufor.append((teraz, wpis))
+    if _epizod is not None:
+        if _w_alarmie:
+            _dodaj_inna(_epizod, wpis, "w_trakcie")
+        elif _koniec_mono is not None and teraz - _koniec_mono <= ALARM_PO_S:
+            _dodaj_inna(_epizod, wpis, "po")
+    _zapisz_jesli_trzeba()
+
+
 def sledz_alarm(message):
-    global _ostatnia_normalna, _w_alarmie, _epizod
+    global _ostatnia_normalna, _w_alarmie, _epizod, _koniec_mono, _brudny
     if len(message) <= 27:
         return
     teraz = datetime.now().isoformat(timespec="seconds")
@@ -104,9 +179,11 @@ def sledz_alarm(message):
     if message[27] != ALARM_STAN:
         if _w_alarmie and _epizod is not None:
             _epizod["koniec"] = teraz
+            _koniec_mono = time.monotonic()
             _zapisz_epizod(_epizod)
         _w_alarmie = False
         _ostatnia_normalna = (teraz, ramka)
+        _zapisz_jesli_trzeba()
         return
 
     if not _w_alarmie:
@@ -124,7 +201,14 @@ def sledz_alarm(message):
             "ramka_przed": {"timestamp": przed_ts, "dlugosc": len(przed) if przed else None, "ramka": przed},
             "ramka_alarm_pierwsza": {"timestamp": teraz, "dlugosc": len(ramka), "ramka": ramka},
             "ramka_alarm_ostatnia": {"timestamp": teraz, "dlugosc": len(ramka), "ramka": ramka},
+            "inne_ramki": [],
         }
+        _koniec_mono = None
+        # inne ramki z ostatnich ALARM_PRZED_S sekund przed alarmem
+        granica = time.monotonic() - ALARM_PRZED_S
+        for t, wpis in _bufor:
+            if t >= granica:
+                _dodaj_inna(_epizod, wpis, "przed")
         _zapisz_epizod(_epizod)
         _sprzataj_stare()
         print(f"ALARM - zapisano {os.path.join(ALARM_KATALOG, _epizod['plik'])}")
@@ -133,8 +217,8 @@ def sledz_alarm(message):
     # alarm trwa - aktualizacja w pamieci, zapis na SD co ALARM_ZAPIS_CO s
     _epizod["licznik_ramek"] += 1
     _epizod["ramka_alarm_ostatnia"] = {"timestamp": teraz, "dlugosc": len(ramka), "ramka": ramka}
-    if time.monotonic() - _ostatni_zapis >= ALARM_ZAPIS_CO:
-        _zapisz_epizod(_epizod)
+    _brudny = True
+    _zapisz_jesli_trzeba()
 
 _wczytaj_alarmy()
 
@@ -166,6 +250,9 @@ def parseFrame08(message):
     IGNITIONS_short = 263
     AIRFLOW_percent_byte = 245
     OUTPUTS_byte = 28   # bitowa mapa stanow wyjsc (bit7..bit0)
+    OUTPUTS2_byte = 29       # prawdopodobnie drugi bajt wyjsc (niepotwierdzone)
+    ALARM_KOD_byte = 196     # kandydat na kod/flage alarmu (niepotwierdzone)
+    ALARM_FLAGA_byte = 198   # zmienia sie przy alarmie (niepotwierdzone)
     MIXER_SET_STATUS_byte = 227
     MIXER_STATUSES = {0: "STOP", 1: "ZAMYKANIE", 2: "OTWIERANIE"}
 
@@ -328,6 +415,16 @@ def parseFrame08(message):
             "podajnik_2": feeder2 == "ON",
             "podajnik": feeder == "ON",
             "wentylator": fan == "ON",
+        },
+        # Surowe bajty zwiazane z alarmem (znaczenie jeszcze nie potwierdzone).
+        # Z logu 27.12.2024: przy alarmie po nieudanym rozpaleniu b196: 0->32,
+        # b198: 2->0, b29: 4->2. Zbieramy, zeby zbudowac mape kod -> opis.
+        "alarm": {
+            "aktywny": message[OPERATING_STATUS_byte] == ALARM_STAN,
+            "kod": _bajt(message, ALARM_KOD_byte),
+            "bajt_198": _bajt(message, ALARM_FLAGA_byte),
+            "wyjscia2": _bajt(message, OUTPUTS2_byte),
+            "wyjscia2_bity": f"{_bajt(message, OUTPUTS2_byte):08b}" if _bajt(message, OUTPUTS2_byte) is not None else None,
         },
     }
 
