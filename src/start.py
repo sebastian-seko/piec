@@ -3,11 +3,14 @@
 # Gwarancji żadnej nie daję. Ale można korzystać do woli i modyfikować wg potrzeb
 
 import functools
+import json
 import math
+import os
 import socket
 import struct
 import sys
 import time
+from datetime import datetime
 
 import serial
 import ecoster
@@ -40,6 +43,54 @@ NADAWCA_TYP_ECONET = 0x30
 
 RAMKA_INFO_STEROWNIKA = 0x08
 RAMKA_INFO_PANELU = 0x89
+
+# Ramki obslugiwane przez parsery: (nadawca, typ ramki)
+ZNANE_RAMKI = {
+    (NADAWCA_ECOMAX, RAMKA_INFO_STEROWNIKA),
+    (NADAWCA_ECOSTER, RAMKA_INFO_PANELU),
+}
+
+# Nieznane ramki - ostatnia ramka dla kazdej kombinacji nadawca/odbiorca/typ.
+# /data to tmpfs 1 MB, wiec trzymamy tylko najnowsza ramke per rodzaj i limit wpisow.
+NIEZNANE_PLIK = "/data/nieznane.json"
+NIEZNANE_LIMIT = 32
+nieznane = {}
+
+
+def zapisz_nieznana(ramka, message):
+    nadawca = ramka[ADRES_NADAWCY_BYTE]
+    odbiorca = ramka[ADRES_ODBIORCY_BYTE]
+    typ = ramka[TYP_RAMKI]
+    klucz = f"nadawca_0x{nadawca:02X}_odbiorca_0x{odbiorca:02X}_typ_0x{typ:02X}"
+    teraz = datetime.now().isoformat(timespec="seconds")
+
+    wpis = nieznane.get(klucz)
+    if wpis is None:
+        if len(nieznane) >= NIEZNANE_LIMIT:
+            # wyrzuc najdawniej widziany rodzaj ramki
+            najstarszy = min(nieznane, key=lambda k: nieznane[k]["ostatnio"])
+            del nieznane[najstarszy]
+        wpis = {
+            "nadawca": f"0x{nadawca:02X}",
+            "odbiorca": f"0x{odbiorca:02X}",
+            "typ": f"0x{typ:02X}",
+            "licznik": 0,
+            "pierwszy_raz": teraz,
+        }
+        nieznane[klucz] = wpis
+
+    wpis["licznik"] += 1
+    wpis["ostatnio"] = teraz
+    wpis["dlugosc"] = len(message)
+    wpis["ramka"] = list(message)
+
+    tmp = NIEZNANE_PLIK + ".tmp"
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(nieznane, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, NIEZNANE_PLIK)
+    except (OSError, TypeError, ValueError) as e:
+        print(f"Błąd zapisu pliku {NIEZNANE_PLIK}: {e}")
 
 try:
     SOURCE
@@ -177,6 +228,10 @@ while True:
                         print(f"{od:03d}-{do-1:03d} \t{' '.join(messageHEX[od:do])}", end='')
                         print('   ' * ((od + rowsize) - do), end='')
                         print(f" \t{message[od:do]}")
+
+                if len(ramka) > TYP_RAMKI and len(message) > 0:
+                    if (ramka[ADRES_NADAWCY_BYTE], ramka[TYP_RAMKI]) not in ZNANE_RAMKI:
+                        zapisz_nieznana(ramka, message)
 
                 if len(ramka) > ADRES_NADAWCY_BYTE:
                     if ramka[ADRES_NADAWCY_BYTE] == NADAWCA_ECOSTER:
