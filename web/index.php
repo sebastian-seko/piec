@@ -2,9 +2,9 @@
 $page = $_SERVER['PHP_SELF'];
 $sec  = 10;
 
-$data_file = "/data/odczyty.txt";
+$data_file = "/data/odczyty.json";
 $error     = null;
-$m         = [];
+$o         = [];
 
 if (!file_exists($data_file)) {
     $error = "Brak pliku danych: $data_file";
@@ -13,26 +13,28 @@ if (!file_exists($data_file)) {
     if ($raw === false) {
         $error = "Nie można odczytać: $data_file";
     } else {
-        $m = explode(",", trim($raw));
-        if (count($m) < 13) {
-            $error = "Niekompletne dane w pliku ($data_file)";
+        $data = json_decode($raw, true);
+        if (!is_array($data) || !isset($data['odczyty'])) {
+            $error = "Niepoprawny JSON w pliku ($data_file)";
+        } else {
+            $o = $data['odczyty'];
         }
     }
 }
 
 if (!$error) {
-    $tempCWU      = round((float)$m[0],  1);
-    $tempCO       = round((float)$m[1],  1);
-    $tempDwor     = round((float)$m[2],  1);
-    $tempPalnik   = round((float)$m[3],  1);
-    $tempMieszacz = round((float)$m[4],  1);
-    $stan         = trim($m[5]);
-    $setCO        = (int)$m[6];
-    $setCWU       = (int)$m[7];
-    $setMieszacz  = (int)$m[8];
-    $nadmuch      = (int)$m[9];
-    $mieszaczProc = (int)$m[10];
-    $mocKotla     = round((float)$m[12], 1);
+    $tempCWU      = round((float)$o['cwu'],      1);
+    $tempCO       = round((float)$o['co'],       1);
+    $tempDwor     = round((float)$o['dwor'],     1);
+    $tempPalnik   = round((float)$o['palnik'],   1);
+    $tempMieszacz = round((float)$o['mieszacz'], 1);
+    $stan         = trim((string)$o['stan']);
+    $setCO        = (int)$o['zadana_co'];
+    $setCWU       = (int)$o['zadana_cwu'];
+    $setMieszacz  = (int)$o['zadana_mieszacz'];
+    $nadmuch      = (int)$o['nadmuch'];
+    $mieszaczProc = (int)$o['mieszacz_otwarcie'];
+    $mocKotla     = round((float)$o['moc'], 1);
 }
 
 $status_colors = [

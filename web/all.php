@@ -1,39 +1,49 @@
 <?php
 header('Content-Type: application/json');
+define("ODCZYTY_JSON", "/data/odczyty.json");
 
-define("THERMOMETER_SENSOR_PATH1", "/data/odczyty.txt");
+$raw  = @file_get_contents(ODCZYTY_JSON);
+$data = $raw === false ? null : json_decode($raw, true);
+if (!is_array($data) || !isset($data['odczyty'], $data['serwis'], $data['wyjscia'])) {
+    http_response_code(503);
+    echo json_encode(["error" => "Brak lub niepoprawny " . ODCZYTY_JSON], JSON_UNESCAPED_UNICODE);
+    exit;
+}
 
-$data = file_get_contents(THERMOMETER_SENSOR_PATH1);
-$values = array_map('trim', explode(',', $data));
+$o = $data['odczyty'];
+$s = $data['serwis'];
+$w = $data['wyjscia'];
 
 $result = [
-    "cwu" => (float)$values[0],
-    "co" => (float)$values[1],
-    "dwor" => (float)$values[2],
-    "palnik" => (float)$values[3],
-    "mieszacz" => (float)$values[4],
-    "stan" => (string)$values[5],
-    "zadana_co" => (int)$values[6],
-    "zadana_cwu" => (int)$values[7],
-    "zadana_mieszacz" => (int)$values[8],
-    "nadmuch" => (int)$values[9],
-    "mieszacz_otwarcie" => (int)$values[10],
-    "strumien_paliwa" => (float)$values[11],
-    "moc" => (float)$values[12],
-    "plomien" => (float)$values[13],
-    "praca_max_h" => (int)$values[14],
-    "praca_sred_h" => (int)$values[15],
-    "praca_min_h" => (int)$values[16],
-    "zaplony" => (int)$values[17],
-    "podajnik_czas_h" => (int)$values[18],
-    "pompa_mieszacz" => trim($values[19]) === "ON",
-    "pompa_cwu" => trim($values[20]) === "ON",
-    "pompa_piec" => trim($values[21]) === "ON",
-    "zapalarka" => trim($values[22]) === "ON",
-    "silownik_czyszczacy" => trim($values[23]) === "ON",
-    "podajnik_2" => trim($values[24]) === "ON",
-    "podajnik" => trim($values[25]) === "ON",
-    "wentylator" => trim($values[26]) === "ON",
+    "cwu" => (float)$o['cwu'],
+    "co" => (float)$o['co'],
+    "dwor" => (float)$o['dwor'],
+    "palnik" => (float)$o['palnik'],
+    "mieszacz" => (float)$o['mieszacz'],
+    "stan" => (string)$o['stan'],
+    "zadana_co" => (int)$o['zadana_co'],
+    "zadana_cwu" => (int)$o['zadana_cwu'],
+    "zadana_mieszacz" => (int)$o['zadana_mieszacz'],
+    "nadmuch" => (int)$o['nadmuch'],
+    "mieszacz_otwarcie" => (int)$o['mieszacz_otwarcie'],
+    "mieszacz_status" => (string)$o['mieszacz_status'],
+    "strumien_paliwa" => (float)$o['strumien_paliwa'],
+    "moc" => (float)$o['moc'],
+    "plomien" => (float)$o['plomien'],
+    "praca_max_h" => (int)$s['praca_max_h'],
+    "praca_sred_h" => (int)$s['praca_sred_h'],
+    "praca_min_h" => (int)$s['praca_min_h'],
+    "zaplony" => (int)$s['zaplony'],
+    "podajnik_czas_h" => (int)$s['podajnik_czas_h'],
+    "pompa_mieszacz" => (bool)$w['pompa_mieszacz'],
+    "pompa_cwu" => (bool)$w['pompa_cwu'],
+    "pompa_piec" => (bool)$w['pompa_piec'],
+    "zapalarka" => (bool)$w['zapalarka'],
+    "silownik_czyszczacy" => (bool)$w['silownik_czyszczacy'],
+    "podajnik_2" => (bool)$w['podajnik_2'],
+    "podajnik" => (bool)$w['podajnik'],
+    "wentylator" => (bool)$w['wentylator'],
+    "odczyt" => $data['timestamp'],
     "timestamp" => date('c')
 ];
 

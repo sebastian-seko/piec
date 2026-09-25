@@ -1,5 +1,7 @@
 #ecoMAX 850 P2
 import struct
+import json
+from datetime import datetime
 
 print("Zaimportowano bibliotekę sterownika EcoMax850P2")
 filename = "/data/odczyty.txt"
@@ -31,6 +33,8 @@ def parseFrame08(message):
     IGNITIONS_short = 263
     AIRFLOW_percent_byte = 245
     OUTPUTS_byte = 28   # bitowa mapa stanow wyjsc (bit7..bit0)
+    MIXER_SET_STATUS_byte = 227
+    MIXER_STATUSES = {0: "STOP", 1: "ZAMYKANIE", 2: "OTWIERANIE"}
 
     OPERATION_STATUSES = {0:'WYŁĄCZONY', 1:'ROZPALANIE', 2:'PRACA', 4:'WYGASZANIE', 5:'POSTÓJ', 6:'PRACA RĘCZNA', 7:'ALARM', 8:'CZYSZCZENIE'}
     print("")
@@ -59,6 +63,8 @@ def parseFrame08(message):
         print(f"Nadmuch: {AIRFLOW_percent_byte_val} %")
         MIXER_SET_percent_byte_val = message[MIXER_SET_percent_byte]
         print(f"Ustawienie mieszacza procent: {MIXER_SET_percent_byte_val} %")
+        status_mixer_set = MIXER_STATUSES.get(message[MIXER_SET_STATUS_byte], str(message[MIXER_SET_STATUS_byte]))
+        print(f"Status mieszacza: {status_mixer_set}")
         BOILER_POWER_float_val = struct.unpack("f", bytes(message[BOILER_POWER_float:BOILER_POWER_float+4]))[0]
         print(f"Moc kotła: {BOILER_POWER_float_val:.1f}")
         flame = struct.unpack("f", bytes(message[FLAME_float:FLAME_float+4]))[0]
@@ -111,7 +117,7 @@ def parseFrame08(message):
         print(f"Nieoczekiwany błąd parsowania EcoMax08: {e}")
         return
 
-    results = "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s" % (
+    results = "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s" % (
         tempCWU, tempCO, tempPogodowa, tempPodajnika, tempMieszacza,
         OP, TEMP_CO_SET_byte_val, TEMP_CWU_SET_byte_val,
         TEMP_MIXER_SET_byte_val, AIRFLOW_percent_byte_val,
@@ -119,7 +125,8 @@ def parseFrame08(message):
         POWER100_TIME_short_val, POWER50_TIME_short_val, POWER30_TIME_short_val,
         IGNITIONS_short_val, FEEDER_TIME_short_val,
         mixer_pump, cwu_pump, boiler_pump, ignition,
-        cleaning_actuator, feeder2, feeder, fan
+        cleaning_actuator, feeder2, feeder, fan,
+        status_mixer_set
     )
     try:
         with open(filename, 'w') as outfile:
@@ -127,8 +134,68 @@ def parseFrame08(message):
     except OSError as e:
         print(f"Błąd zapisu pliku {filename}: {e}")
 
+    # Surowa ramka (format listy) - uzywana przez narzedzia w test/ (compare.py, main.py)
     try:
         with open("/data/message.txt", 'w') as file_message:
             file_message.write("%s" % (message,))
     except OSError as e:
         print(f"Błąd zapisu pliku /data/message.txt: {e}")
+
+    timestamp = datetime.now().isoformat(timespec="seconds")
+
+    # Surowe dane: sama ramka + metadane
+    raw = {
+        "timestamp": timestamp,
+        "typ_ramki": f"0x{message[0]:02X}",
+        "dlugosc": len(message),
+        "ramka": list(message),
+    }
+
+    # Dane przetworzone: nazwane, gotowe do uzycia
+    data = {
+        "timestamp": timestamp,
+        "odczyty": {
+            "stan": OP,
+            "cwu": round(tempCWU, 2),
+            "co": round(tempCO, 2),
+            "dwor": round(tempPogodowa, 2),
+            "palnik": round(tempPodajnika, 2),
+            "mieszacz": round(tempMieszacza, 2),
+            "zadana_co": TEMP_CO_SET_byte_val,
+            "zadana_cwu": TEMP_CWU_SET_byte_val,
+            "zadana_mieszacz": TEMP_MIXER_SET_byte_val,
+            "nadmuch": AIRFLOW_percent_byte_val,
+            "mieszacz_otwarcie": MIXER_SET_percent_byte_val,
+            "mieszacz_status": status_mixer_set,
+            "strumien_paliwa": round(fuelStream, 2),
+            "moc": round(BOILER_POWER_float_val, 2),
+            "plomien": round(flame, 2),
+        },
+        "serwis": {
+            "blok_offset": svc_base,
+            "praca_max_h": POWER100_TIME_short_val,
+            "praca_sred_h": POWER50_TIME_short_val,
+            "praca_min_h": POWER30_TIME_short_val,
+            "zaplony": IGNITIONS_short_val,
+            "podajnik_czas_h": FEEDER_TIME_short_val,
+        },
+        "wyjscia": {
+            "bajt": message[OUTPUTS_byte],
+            "bity": f"{message[OUTPUTS_byte]:08b}",
+            "pompa_mieszacz": mixer_pump == "ON",
+            "pompa_cwu": cwu_pump == "ON",
+            "pompa_piec": boiler_pump == "ON",
+            "zapalarka": ignition == "ON",
+            "silownik_czyszczacy": cleaning_actuator == "ON",
+            "podajnik_2": feeder2 == "ON",
+            "podajnik": feeder == "ON",
+            "wentylator": fan == "ON",
+        },
+    }
+
+    for path, payload in (("/data/message.json", raw), ("/data/odczyty.json", data)):
+        try:
+            with open(path, 'w', encoding='utf-8') as fj:
+                json.dump(payload, fj, ensure_ascii=False, indent=2)
+        except (OSError, TypeError, ValueError) as e:
+            print(f"Błąd zapisu pliku {path}: {e}")
