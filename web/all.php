@@ -45,6 +45,7 @@ $result = [
     "wentylator" => (bool)$w['wentylator'],
     "alarm" => isset($data['alarm']) ? (bool)$data['alarm']['aktywny'] : null,
     "alarm_kod" => $data['alarm']['kod'] ?? null,
+    "alarm_opis" => $data['alarm']['opis'] ?? null,
     "alarm_bajt_198" => $data['alarm']['bajt_198'] ?? null,
     "wyjscia2" => $data['alarm']['wyjscia2'] ?? null,
     "odczyt" => $data['timestamp'],

@@ -1,4 +1,5 @@
 #ecoMAX 850 P2
+import atexit
 import struct
 import json
 import os
@@ -26,6 +27,255 @@ ALARM_PRZED_S = 120         # ile sekund przed alarmem dolaczyc z bufora
 ALARM_PO_S = 120            # ile sekund po koncu alarmu jeszcze zbierac
 ALARM_BUFOR = 200           # ile ostatnich innych ramek trzymac w pamieci
 ALARM_MAX_INNYCH = 500      # max roznych (unikalna tresc) innych ramek w pliku
+
+# --- Kody alarmow (bajt 196 ramki 0x08) ---------------------------------------
+# "potwierdzony": False = opis to wniosek z danych, nie tekst odczytany z panelu.
+# Po potwierdzeniu z panelu zmien na True. Nowe kody dopisuj tutaj.
+ALARM_KOD_BAJT = 196
+ALARM_KODY = {
+    32: {"opis": "Nieudane rozpalenie", "potwierdzony": False},
+}
+
+
+def opis_alarmu(kod):
+    if kod is None or kod == 0:
+        return None
+    k = ALARM_KODY.get(kod)
+    if k is None:
+        return f"Nieznany alarm (kod {kod})"
+    return k["opis"] if k["potwierdzony"] else f"{k['opis']} (niepotwierdzone)"
+
+
+# --- Polecenia i odpowiedzi (wszystko poza cyklicznym odpytywaniem) -----------
+# Piec (0x45) co ~0,85 s odpytuje adresy 0x50/0x51/0x55/0x56 (+0x57/0x58 co 4. cykl)
+# jednobajtowymi ramkami (typ < 0x80). Wszystko INNE jest ciekawe i trafia do
+# polecenia.jsonl: ramki od innych nadawcow do pieca oraz odpowiedzi pieca
+# (typ = typ polecenia + 0x80). Zaobserwowane pary:
+#   0x70 -> 0xF0  zmiana parametru, np. [1, 49, 65] = parametr 49 (zadana CO) na 65
+#   0x61 -> 0xE1  odczyt tabeli parametrow: [255, 0] -> [ile, od_nr, (wart, min, max) * ile]
+#   0x71 -> 0xF1  polecenie, np. [3, 32, 0] = kasowanie alarmu 32; [2] = nieznane
+ADRES_PIECA = 0x45
+POLECENIA_PLIK = "/home/pi/piec_dane/polecenia.jsonl"   # karta SD, przetrwa restart
+POLECENIE_STAN_PO_S = 10    # po ilu sekundach zapisac stan pieca "po" poleceniu
+KASOWANIE_OKNO_S = 30       # kasowanie max tyle s przed koncem alarmu => "skasowany"
+
+# --- Tabela parametrow (ramka 0xE1) ----------------------------------------------
+PARAMETRY_KATALOG = "/home/pi/piec_dane"
+PARAMETRY_PLIK = PARAMETRY_KATALOG + "/parametry.json"            # ostatnia tabela
+PARAMETRY_ZMIANY = PARAMETRY_KATALOG + "/parametry_zmiany.jsonl"  # co sie zmienilo
+PARAMETRY_MIGAWKI = PARAMETRY_KATALOG + "/parametry"              # kazda odebrana tabela
+PARAMETRY_MAX_MIGAWEK = 1000
+
+# Nazwy parametrow. "zrodlo" mowi, skad wiemy - dopisuj kolejne, gdy zmienisz cos
+# w menu panelu i zobaczysz, ktory numer zmienil sie w parametry_zmiany.jsonl.
+PARAMETRY_NAZWY = {
+    49: {"nazwa": "Temperatura zadana CO", "zrodlo": "zgodna z bajtem 154 ramki 0x08 (65)"},
+    52: {"nazwa": "Temperatura zadana CWU", "zrodlo": "zgodna z bajtem 153 ramki 0x08 (45)"},
+}
+
+
+def nazwa_parametru(nr):
+    p = PARAMETRY_NAZWY.get(nr)
+    return p["nazwa"] if p else None
+
+
+def czy_polecenie(nadawca, typ):
+    """Ramka spoza cyklicznego odpytywania: od kogos innego niz piec albo odpowiedz pieca."""
+    return nadawca != ADRES_PIECA or typ >= 0x80
+
+
+_ostatni_stan = None        # bajt 27 z ostatniej ramki 0x08
+_ostatni_kod = None         # bajt 196 z ostatniej ramki 0x08
+_oczekujace = []            # polecenia czekajace na "stan_po": (monotonic, rekord, epizod)
+_ostatnie_kasowanie = None  # (monotonic, rekord) ostatniego polecenia kasowania
+_start_mono = 0.0           # monotonic() poczatku biezacego epizodu
+_parametry = None           # ostatnia tabela parametrow {nr: (wart, min, max)}
+
+
+def _opis_param(nr):
+    n = nazwa_parametru(nr)
+    return f"parametr {nr} ({n})" if n else f"parametr {nr}"
+
+
+def dekoduj_polecenie(typ, message):
+    """Zwraca (opis, rodzaj). message[0] to typ ramki."""
+    dane = list(message[1:])
+    if typ == 0x71:
+        if len(dane) >= 2 and dane[0] == 3:
+            return f"kasowanie alarmu {dane[1]} ({opis_alarmu(dane[1])})", "kasowanie_alarmu"
+        if dane[:1] == [2]:
+            return "polecenie 0x71 [2] - nieznane (panel wysyła je po kasowaniu alarmu)", "nieznane"
+        return f"polecenie 0x71 {dane} - nieznane", "nieznane"
+    if typ == 0xF1:
+        return f"odpowiedź pieca na polecenie 0x71 {dane}", "odpowiedz"
+    if typ == 0x70:
+        # [ile, nr, wartosc, nr, wartosc, ...] - przy 1 parametrze: [1, 49, 65]
+        if dane and len(dane) == 1 + 2 * dane[0]:
+            zmiany = []
+            for i in range(dane[0]):
+                nr, w = dane[1 + 2 * i], dane[2 + 2 * i]
+                stara = _parametry.get(nr) if _parametry else None
+                z = f"{_opis_param(nr)} -> {w}"
+                if stara is not None:
+                    z += f" (było {stara[0]}, zakres {stara[1]}-{stara[2]})"
+                zmiany.append(z)
+            return "zmiana: " + "; ".join(zmiany), "zmiana_parametru"
+        return f"zmiana parametru 0x70 {dane} - nieznany układ", "zmiana_parametru"
+    if typ == 0xF0:
+        return f"odpowiedź pieca na zmianę parametru {dane}", "odpowiedz"
+    if typ == 0x61:
+        return f"odczyt tabeli parametrów {dane}", "odczyt_parametrow"
+    if typ == 0xE1:
+        if len(dane) >= 2 and len(dane) == 2 + 3 * dane[0]:
+            return f"tabela parametrów: {dane[0]} pozycji od nr {dane[1]}", "tabela_parametrow"
+        return f"tabela parametrów 0xE1 - nieznany układ ({len(dane)} B)", "tabela_parametrow"
+    if typ >= 0x80:
+        return f"odpowiedź pieca typ 0x{typ:02X} (na 0x{typ - 0x80:02X}) {dane[:20]}", "odpowiedz"
+    return f"typ 0x{typ:02X} {dane[:20]}", "nieznane"
+
+
+def _zapisz_json(sciezka, dane):
+    tmp = sciezka + ".tmp"
+    os.makedirs(os.path.dirname(sciezka), exist_ok=True)
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(dane, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, sciezka)
+
+
+def _wczytaj_parametry():
+    """Przy starcie: ostatnia znana tabela, zeby porownywac z nastepna."""
+    global _parametry
+    try:
+        with open(PARAMETRY_PLIK, encoding='utf-8') as f:
+            d = json.load(f)
+        _parametry = {p["nr"]: (p["wartosc"], p["min"], p["max"]) for p in d["parametry"]}
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        print(f"Nie można wczytać {PARAMETRY_PLIK}: {e}")
+
+
+def _zapisz_parametry(wpis, message):
+    """Ramka 0xE1: zapis tabeli, migawki i listy zmian wzgledem poprzedniej."""
+    global _parametry
+    dane = list(message[1:])
+    if len(dane) < 2 or len(dane) != 2 + 3 * dane[0]:
+        print(f"Tabela parametrów o nieznanym układzie ({len(dane)} B) - pomijam dekodowanie")
+        return
+    ile, od = dane[0], dane[1]
+    nowe = {od + i: tuple(dane[2 + 3 * i: 5 + 3 * i]) for i in range(ile)}
+    ts = wpis["timestamp"]
+    tabela = {
+        "timestamp": ts,
+        "liczba": ile,
+        "od_nr": od,
+        "parametry": [
+            {"nr": nr, "nazwa": nazwa_parametru(nr), "wartosc": w, "min": mn, "max": mx,
+             "poza_zakresem": not (mn <= w <= mx)}
+            for nr, (w, mn, mx) in sorted(nowe.items())
+        ],
+        "ramka_pelna": wpis.get("ramka_pelna"),
+    }
+    try:
+        _zapisz_json(PARAMETRY_PLIK, tabela)
+        baza = "parametry_" + ts.replace(":", "-").replace("T", "_")
+        nazwa, n = baza + ".json", 1
+        while os.path.exists(os.path.join(PARAMETRY_MIGAWKI, nazwa)):
+            n += 1
+            nazwa = f"{baza}_{n}.json"
+        _zapisz_json(os.path.join(PARAMETRY_MIGAWKI, nazwa), tabela)
+        migawki = sorted(os.listdir(PARAMETRY_MIGAWKI))
+        for f in migawki[:-PARAMETRY_MAX_MIGAWEK]:
+            os.remove(os.path.join(PARAMETRY_MIGAWKI, f))
+    except (OSError, TypeError, ValueError) as e:
+        print(f"Błąd zapisu tabeli parametrów: {e}")
+
+    if _parametry is not None:
+        zmiany = []
+        for nr in sorted(set(nowe) | set(_parametry)):
+            a, b = _parametry.get(nr), nowe.get(nr)
+            if a != b:
+                zmiany.append({
+                    "timestamp": ts, "nr": nr, "nazwa": nazwa_parametru(nr),
+                    "bylo": None if a is None else {"wartosc": a[0], "min": a[1], "max": a[2]},
+                    "jest": None if b is None else {"wartosc": b[0], "min": b[1], "max": b[2]},
+                })
+        if zmiany:
+            try:
+                os.makedirs(PARAMETRY_KATALOG, exist_ok=True)
+                with open(PARAMETRY_ZMIANY, 'a', encoding='utf-8') as f:
+                    for z in zmiany:
+                        f.write(json.dumps(z, ensure_ascii=False) + "\n")
+            except OSError as e:
+                print(f"Błąd zapisu {PARAMETRY_ZMIANY}: {e}")
+            print(f"PARAMETRY: zmieniło się {len(zmiany)}: " +
+                  ", ".join(f"{z['nr']}: {z['bylo'] and z['bylo']['wartosc']} -> {z['jest'] and z['jest']['wartosc']}"
+                            for z in zmiany[:10]))
+    _parametry = nowe
+
+
+def _nazwa_stanu(st):
+    return {0: 'WYŁĄCZONY', 1: 'ROZPALANIE', 2: 'PRACA', 4: 'WYGASZANIE', 5: 'POSTÓJ',
+            6: 'PRACA RĘCZNA', 7: 'ALARM', 8: 'CZYSZCZENIE'}.get(st, None if st is None else str(st))
+
+
+def _dopisz_polecenie(rekord):
+    try:
+        os.makedirs(os.path.dirname(POLECENIA_PLIK), exist_ok=True)
+        with open(POLECENIA_PLIK, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(rekord, ensure_ascii=False) + "\n")
+    except (OSError, TypeError, ValueError) as e:
+        print(f"Błąd zapisu pliku {POLECENIA_PLIK}: {e}")
+
+
+def _obsluz_oczekujace(wymus=False):
+    """Uzupelnia stan_po polecen sprzed >= POLECENIE_STAN_PO_S s i zapisuje je."""
+    global _brudny
+    teraz = time.monotonic()
+    zostaja = []
+    for t, rek, ep in _oczekujace:
+        if wymus or teraz - t >= POLECENIE_STAN_PO_S:
+            rek["stan_po"] = _nazwa_stanu(_ostatni_stan)
+            rek["alarm_kod_po"] = _ostatni_kod
+            _dopisz_polecenie(rek)
+            if ep is not None:
+                if ep is _epizod:
+                    _brudny = True
+                else:
+                    _zapisz_epizod(ep)       # epizod juz zamkniety - zapisz od razu
+        else:
+            zostaja.append((t, rek, ep))
+    _oczekujace[:] = zostaja
+
+
+def _zglos_polecenie(wpis, typ, message):
+    global _ostatnie_kasowanie, _brudny
+    opis, rodzaj = dekoduj_polecenie(typ, message)
+    rek = {
+        "timestamp": wpis["timestamp"],
+        "nadawca": wpis["nadawca"],
+        "odbiorca": wpis["odbiorca"],
+        "typ": wpis["typ"],
+        "rodzaj": rodzaj,
+        "opis": opis,
+        "stan_przed": _nazwa_stanu(_ostatni_stan),
+        "alarm_kod_przed": _ostatni_kod,
+        "stan_po": None,
+        "alarm_kod_po": None,
+        "ramka": wpis["ramka"],
+        "ramka_pelna": wpis.get("ramka_pelna"),
+    }
+    print(f"POLECENIE: {opis} (od {wpis['nadawca']})")
+    teraz = time.monotonic()
+    if rodzaj == "kasowanie_alarmu":
+        _ostatnie_kasowanie = (teraz, rek)
+    ep = None
+    if _epizod is not None and (_w_alarmie or (_koniec_mono is not None and teraz - _koniec_mono <= ALARM_PO_S)):
+        ep = _epizod
+        ep.setdefault("polecenia", []).append(rek)
+        _brudny = True
+    _oczekujace.append((teraz, rek, ep))
+
 
 _ostatnia_normalna = None   # (timestamp, ramka) ostatniej ramki bez alarmu
 _epizod = None              # biezacy / ostatni epizod alarmu (dict)
@@ -105,6 +355,7 @@ def _wczytaj_alarmy():
         return
     if isinstance(ep, dict) and ep.get("koniec") is None:
         ep["koniec"] = "przerwany (restart usługi)"
+        ep["sposob_zakonczenia"] = "nieznany - usługa zrestartowana w trakcie alarmu"
         ep["plik"] = pliki[-1]
         _zapisz_epizod(ep)
 
@@ -136,6 +387,7 @@ def _dodaj_inna(ep, wpis, faza):
         "typ": wpis["typ"],
         "dlugosc": len(wpis["ramka"]),
         "ramka": wpis["ramka"],
+        "ramka_pelna": wpis.get("ramka_pelna"),
     })
     _brudny = True
 
@@ -150,8 +402,9 @@ def _zapisz_jesli_trzeba():
         _zapisz_epizod(_epizod)
 
 
-def zglos_inna_ramke(nadawca, odbiorca, typ, message):
-    """Wolane z start.py dla kazdej ramki, ktorej nie obsluguje zaden parser."""
+def zglos_inna_ramke(nadawca, odbiorca, typ, message, ramka_pelna=None):
+    """Wolane z start.py dla kazdej ramki, ktorej nie obsluguje zaden parser.
+    ramka_pelna = cala ramka z naglowkiem, CRC i bajtem stopu (jesli dostepna)."""
     teraz = time.monotonic()
     wpis = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -160,7 +413,13 @@ def zglos_inna_ramke(nadawca, odbiorca, typ, message):
         "typ": f"0x{typ:02X}",
         "ramka": list(message),
     }
+    if ramka_pelna is not None:
+        wpis["ramka_pelna"] = list(ramka_pelna)
     _bufor.append((teraz, wpis))
+    if czy_polecenie(nadawca, typ):
+        _zglos_polecenie(wpis, typ, message)
+        if typ == 0xE1:
+            _zapisz_parametry(wpis, message)
     if _epizod is not None:
         if _w_alarmie:
             _dodaj_inna(_epizod, wpis, "w_trakcie")
@@ -171,15 +430,28 @@ def zglos_inna_ramke(nadawca, odbiorca, typ, message):
 
 def sledz_alarm(message):
     global _ostatnia_normalna, _w_alarmie, _epizod, _koniec_mono, _brudny
+    global _ostatni_stan, _ostatni_kod, _ostatnie_kasowanie, _start_mono
     if len(message) <= 27:
         return
     teraz = datetime.now().isoformat(timespec="seconds")
     ramka = list(message)
+    _ostatni_stan = message[27]
+    _ostatni_kod = _bajt(message, ALARM_KOD_BAJT)
+    _obsluz_oczekujace()
 
     if message[27] != ALARM_STAN:
         if _w_alarmie and _epizod is not None:
             _epizod["koniec"] = teraz
             _koniec_mono = time.monotonic()
+            kas = _ostatnie_kasowanie
+            if (kas is not None and kas[0] >= _start_mono
+                    and _koniec_mono - kas[0] <= KASOWANIE_OKNO_S):
+                _epizod["sposob_zakonczenia"] = (
+                    f"skasowany poleceniem od {kas[1]['nadawca']} o {kas[1]['timestamp']}")
+            else:
+                _epizod["sposob_zakonczenia"] = "samoistnie (brak polecenia kasowania)"
+            _ostatnie_kasowanie = None
+            _epizod["stan_po_alarmie"] = _nazwa_stanu(message[27])
             _zapisz_epizod(_epizod)
         _w_alarmie = False
         _ostatnia_normalna = (teraz, ramka)
@@ -188,13 +460,19 @@ def sledz_alarm(message):
 
     if not _w_alarmie:
         # poczatek nowego epizodu alarmu
+        if _epizod is not None and _brudny:
+            _zapisz_epizod(_epizod)          # domknij poprzedni (np. polecenia z okna "po")
         _w_alarmie = True
+        _start_mono = time.monotonic()
         przed_ts, przed = _ostatnia_normalna if _ostatnia_normalna else (None, None)
         os.makedirs(ALARM_KATALOG, exist_ok=True)
         _epizod = {
             "plik": _nazwa_pliku(teraz),
             "poczatek": teraz,
             "koniec": None,
+            "sposob_zakonczenia": None,
+            "kod": _bajt(message, ALARM_KOD_BAJT),
+            "opis": opis_alarmu(_bajt(message, ALARM_KOD_BAJT)),
             "licznik_ramek": 1,
             "roznica_dlugosci": (len(ramka) - len(przed)) if przed else None,
             "roznice": _roznice(przed, ramka) if przed else [],
@@ -202,6 +480,7 @@ def sledz_alarm(message):
             "ramka_alarm_pierwsza": {"timestamp": teraz, "dlugosc": len(ramka), "ramka": ramka},
             "ramka_alarm_ostatnia": {"timestamp": teraz, "dlugosc": len(ramka), "ramka": ramka},
             "inne_ramki": [],
+            "polecenia": [],
         }
         _koniec_mono = None
         # inne ramki z ostatnich ALARM_PRZED_S sekund przed alarmem
@@ -220,7 +499,19 @@ def sledz_alarm(message):
     _brudny = True
     _zapisz_jesli_trzeba()
 
+def zamknij():
+    """Przy zatrzymaniu uslugi: zapisz oczekujace polecenia i niezapisany epizod."""
+    try:
+        _obsluz_oczekujace(wymus=True)
+        if _epizod is not None and _brudny:
+            _zapisz_epizod(_epizod)
+    except Exception as e:
+        print(f"Błąd przy zamykaniu: {e}")
+
+
 _wczytaj_alarmy()
+_wczytaj_parametry()
+atexit.register(zamknij)
 
 
 def parseFrame(message):
@@ -422,6 +713,9 @@ def parseFrame08(message):
         "alarm": {
             "aktywny": message[OPERATING_STATUS_byte] == ALARM_STAN,
             "kod": _bajt(message, ALARM_KOD_byte),
+            "opis": opis_alarmu(_bajt(message, ALARM_KOD_byte)),
+            "opis_potwierdzony": (ALARM_KODY.get(_bajt(message, ALARM_KOD_byte), {}).get("potwierdzony")
+                                  if _bajt(message, ALARM_KOD_byte) else None),
             "bajt_198": _bajt(message, ALARM_FLAGA_byte),
             "wyjscia2": _bajt(message, OUTPUTS2_byte),
             "wyjscia2_bity": f"{_bajt(message, OUTPUTS2_byte):08b}" if _bajt(message, OUTPUTS2_byte) is not None else None,

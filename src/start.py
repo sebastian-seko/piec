@@ -12,6 +12,8 @@ import sys
 import time
 from datetime import datetime
 
+import signal
+
 import serial
 import ecoster
 import ecomax850p2 as ecomax
@@ -83,6 +85,7 @@ def zapisz_nieznana(ramka, message):
     wpis["ostatnio"] = teraz
     wpis["dlugosc"] = len(message)
     wpis["ramka"] = list(message)
+    wpis["ramka_pelna"] = list(ramka)   # z naglowkiem, CRC i bajtem stopu
 
     tmp = NIEZNANE_PLIK + ".tmp"
     try:
@@ -150,6 +153,10 @@ def reopen_serial():
         except serial.SerialException as e:
             print(f"Nie można połączyć: {e}")
 
+
+# systemctl stop/restart wysyla SIGTERM - zamien go na normalne wyjscie, zeby
+# zadzialaly funkcje atexit (zapis oczekujacych polecen i pliku alarmu).
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
 source = open_source()
 
@@ -234,7 +241,7 @@ while True:
                         zapisz_nieznana(ramka, message)
                         try:
                             ecomax.zglos_inna_ramke(ramka[ADRES_NADAWCY_BYTE], ramka[ADRES_ODBIORCY_BYTE],
-                                                    ramka[TYP_RAMKI], message)
+                                                    ramka[TYP_RAMKI], message, ramka_pelna=ramka)
                         except Exception as e:
                             print(f"Błąd zapisu ramki do alarmu: {e}")
 
