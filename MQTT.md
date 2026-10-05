@@ -31,15 +31,15 @@ RS-485 ─▶ start.py (usługa piec) ─▶ /data/odczyty.json, /data/diag.json
    ```bash
    sudo ./install.sh
    ```
-   Przy pierwszym uruchomieniu powstanie `/etc/piec/mqtt.ini` z `wlaczone = nie`.
+   Przy pierwszym uruchomieniu powstanie `/home/pi/mqtt.ini` z `wlaczone = nie`.
 2. Uzupełnij konfigurację:
    ```bash
-   sudo nano /etc/piec/mqtt.ini
+   nano /home/pi/mqtt.ini
    ```
    Ustaw `host` (adres HA przez VPN), `uzytkownik`, `haslo`, `wlaczone = tak`.
    Użytkownika MQTT najlepiej założyć osobnego (HA → Ustawienia → Osoby →
-   Użytkownicy, albo w konfiguracji dodatku Mosquitto). Plik ma prawa 600,
-   bo jest w nim hasło. Nie trzymaj go w repo.
+   Użytkownicy, albo w konfiguracji dodatku Mosquitto). Plik należy do `pi`
+   i ma prawa 600, bo jest w nim hasło. Nie kopiuj go do katalogu repo.
 3. Uruchom ponownie:
    ```bash
    sudo ./install.sh --skip-deps
@@ -51,7 +51,7 @@ RS-485 ─▶ start.py (usługa piec) ─▶ /data/odczyty.json, /data/diag.json
    ```
    W HA: Ustawienia → Urządzenia → MQTT → **Piec Kpol**.
 
-Wyłączenie: `wlaczone = nie` w `/etc/piec/mqtt.ini` i ponownie
+Wyłączenie: `wlaczone = nie` w `/home/pi/mqtt.ini` i ponownie
 `sudo ./install.sh --skip-deps`.
 
 ## Tematy
@@ -193,5 +193,5 @@ nazw nadanych przez HA). Sprawdź je w Ustawienia → Encje → filtr „piec_kp
 - Biblioteka `paho-mqtt` 1.6 (Raspberry Pi OS Bookworm) i 2.x (nowsze). Kod
   obsługuje obie i obie były testowane.
 - Ponowne łączenie: co 1 s, potem coraz rzadziej, najwyżej co 60 s.
-- Konfiguracja: `/etc/piec/mqtt.ini` (szablon `config/mqtt.ini.example`),
+- Konfiguracja: `/home/pi/mqtt.ini` (szablon `config/mqtt.ini.example`),
   usługa: `config/piec-mqtt.service`.

@@ -1,5 +1,6 @@
 # Konfiguracja publikatora MQTT (usługa piec-mqtt).
-# Na Pi plik leży w /etc/piec/mqtt.ini z prawami 600 (tylko root) - jest tu hasło.
+# Na Pi plik leży w /home/pi/mqtt.ini, właściciel pi, prawa 600 - jest tu hasło.
+# Edycja bez sudo: nano /home/pi/mqtt.ini
 # Tego pliku z hasłem NIE dodawaj do gita. W repo jest tylko ten szablon.
 
 [mqtt]

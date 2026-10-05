@@ -81,13 +81,21 @@ systemctl restart piec
 
 # --- Publikator MQTT (osobna usługa, tylko czyta pliki parsera) ---
 echo "==> Usługa MQTT (piec-mqtt)..."
-MQTT_CONF=/etc/piec/mqtt.ini
-mkdir -p /etc/piec
+MQTT_CONF=/home/pi/mqtt.ini
+# przeniesienie ze starej lokalizacji, jesli ktos ja juz mial
+if [ ! -f "$MQTT_CONF" ] && [ -f /etc/piec/mqtt.ini ]; then
+    mv /etc/piec/mqtt.ini "$MQTT_CONF"
+    rmdir /etc/piec 2>/dev/null || true
+    echo "    Przeniesiono /etc/piec/mqtt.ini -> $MQTT_CONF"
+fi
 if [ ! -f "$MQTT_CONF" ]; then
     cp "$INSTALL_DIR/config/mqtt.ini.example" "$MQTT_CONF"
     echo "    Utworzono $MQTT_CONF z szablonu (wlaczone = nie)."
     echo "    Uzupełnij host/uzytkownik/haslo, ustaw wlaczone = tak i uruchom ponownie install.sh."
 fi
+# wlasciciel pi (edycja bez sudo), prawa 600: nikt inny (np. Apache) nie przeczyta hasla;
+# usluga dziala jako root, wiec i tak go odczyta
+chown pi:pi "$MQTT_CONF"
 chmod 600 "$MQTT_CONF"
 cp "$INSTALL_DIR/config/piec-mqtt.service" /etc/systemd/system/piec-mqtt.service
 systemctl daemon-reload

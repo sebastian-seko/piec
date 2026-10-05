@@ -73,7 +73,7 @@ Znane dziś: 49 = temperatura zadana CO, 52 = temperatura zadana CWU.
 
 Osobna usługa `piec-mqtt` publikuje dane do brokera MQTT (HA Discovery, zdarzenia
 alarmów i poleceń, diagnostyka). Nie dotyka portu szeregowego. Konfiguracja
-w `/etc/piec/mqtt.ini`, opis: [MQTT.md](MQTT.md).
+w `/home/pi/mqtt.ini`, opis: [MQTT.md](MQTT.md).
 
 `/data/diag.json` — liczniki ramek poprawnych i odrzuconych (zapisywane przez parser co 10 s).
 

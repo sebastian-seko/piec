@@ -8,7 +8,7 @@ spowolnic ani zablokowac lapania ramek. Gdy ten proces padnie, parser dziala dal
 
 Tylko publikacja: nie subskrybuje zadnych tematow, z HA nie da sie nic wyslac do pieca.
 
-Konfiguracja: /etc/piec/mqtt.ini (szablon: config/mqtt.ini.example)
+Konfiguracja: /home/pi/mqtt.ini (szablon: config/mqtt.ini.example)
 """
 
 import configparser
@@ -21,7 +21,7 @@ from datetime import datetime
 
 import paho.mqtt.client as mqtt
 
-KONFIG = os.environ.get("PIEC_MQTT_KONFIG", "/etc/piec/mqtt.ini")
+KONFIG = os.environ.get("PIEC_MQTT_KONFIG", "/home/pi/mqtt.ini")
 
 # --- pliki zapisywane przez parser -------------------------------------------
 ODCZYTY = "/data/odczyty.json"
