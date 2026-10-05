@@ -69,6 +69,14 @@ co oznacza dany numer:
 
 Znane dziś: 49 = temperatura zadana CO, 52 = temperatura zadana CWU.
 
+### MQTT / Home Assistant
+
+Osobna usługa `piec-mqtt` publikuje dane do brokera MQTT (HA Discovery, zdarzenia
+alarmów i poleceń, diagnostyka). Nie dotyka portu szeregowego. Konfiguracja
+w `/etc/piec/mqtt.ini`, opis: [MQTT.md](MQTT.md).
+
+`/data/diag.json` — liczniki ramek poprawnych i odrzuconych (zapisywane przez parser co 10 s).
+
 ### Narzędzia ręczne
 
 `narzedzia/kasuj_alarm.py` — eksperymentalne ręczne kasowanie alarmu przez RS-485.

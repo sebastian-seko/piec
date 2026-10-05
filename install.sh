@@ -28,7 +28,7 @@ if [ "$SKIP_DEPS" -eq 1 ]; then
 else
     echo "==> Instalacja zależności systemowych..."
     apt-get update -qq
-    apt-get install -y git python3 python3-serial apache2 libapache2-mod-php
+    apt-get install -y git python3 python3-serial python3-paho-mqtt apache2 libapache2-mod-php
 fi
 
 # Konfiguracja /data/ jako tmpfs (1 MB w RAM)
@@ -78,6 +78,32 @@ systemctl enable piec
 
 echo "==> Restart usługi..."
 systemctl restart piec
+
+# --- Publikator MQTT (osobna usługa, tylko czyta pliki parsera) ---
+echo "==> Usługa MQTT (piec-mqtt)..."
+MQTT_CONF=/etc/piec/mqtt.ini
+mkdir -p /etc/piec
+if [ ! -f "$MQTT_CONF" ]; then
+    cp "$INSTALL_DIR/config/mqtt.ini.example" "$MQTT_CONF"
+    echo "    Utworzono $MQTT_CONF z szablonu (wlaczone = nie)."
+    echo "    Uzupełnij host/uzytkownik/haslo, ustaw wlaczone = tak i uruchom ponownie install.sh."
+fi
+chmod 600 "$MQTT_CONF"
+cp "$INSTALL_DIR/config/piec-mqtt.service" /etc/systemd/system/piec-mqtt.service
+systemctl daemon-reload
+if grep -Eiq '^[[:space:]]*wlaczone[[:space:]]*=[[:space:]]*(tak|yes|true|1)[[:space:]]*$' "$MQTT_CONF"; then
+    if python3 -c "import paho.mqtt.client" 2>/dev/null; then
+        systemctl enable piec-mqtt
+        systemctl restart piec-mqtt
+        echo "    piec-mqtt włączona."
+    else
+        echo "    BRAK biblioteki paho-mqtt - uruchom install.sh bez --skip-deps"
+        echo "    (albo: sudo apt-get install -y python3-paho-mqtt)"
+    fi
+else
+    systemctl disable --now piec-mqtt 2>/dev/null || true
+    echo "    MQTT wyłączone w $MQTT_CONF (wlaczone = nie) - usługa nieaktywna."
+fi
 
 echo ""
 echo "==> Gotowe. Status usługi:"

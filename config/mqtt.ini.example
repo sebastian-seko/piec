@@ -1,0 +1,21 @@
+# Konfiguracja publikatora MQTT (usługa piec-mqtt).
+# Na Pi plik leży w /etc/piec/mqtt.ini z prawami 600 (tylko root) - jest tu hasło.
+# Tego pliku z hasłem NIE dodawaj do gita. W repo jest tylko ten szablon.
+
+[mqtt]
+# tak = usługa publikuje dane do brokera; nie = usługa nic nie robi
+wlaczone = nie
+
+# broker (dodatek Mosquitto w Home Assistant), adres widziany z Pi przez VPN
+host = 192.168.2.X
+port = 1883
+uzytkownik =
+haslo =
+tls = nie
+
+# sekundy; po ok. 1,5 x keepalive bez kontaktu broker ogłosi piec/polaczenie = offline
+keepalive = 30
+
+client_id = piec-kpol
+prefiks = piec
+discovery_prefiks = homeassistant

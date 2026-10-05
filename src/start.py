@@ -154,6 +154,67 @@ def reopen_serial():
             print(f"Nie można połączyć: {e}")
 
 
+# --- Diagnostyka odbioru ------------------------------------------------------
+# Liczniki ramek poprawnych i odrzuconych, zapisywane co DIAG_CO s do /data/diag.json
+# (tmpfs, zero sieci). Pozwalaja sprawdzic, czy cos sie gubi.
+# Odrzucone dzielimy wg dlugosci zadeklarowanej w naglowku ramki:
+#   krotsza - ramka ucieta: zgubione bajty albo podzial na falszywym "16 68" w danych
+#   dluzsza - dwie ramki sklejone (zgubiony bajt 16/68 na granicy)
+#   crc     - dlugosc sie zgadza, ale CRC nie (przeklamany bajt)
+DIAG_PLIK = "/data/diag.json"
+DIAG_CO = 10
+diag = {
+    "start_uslugi": datetime.now().astimezone().isoformat(timespec="seconds"),
+    "razem": {"poprawne": 0, "odrzucone_krotsza": 0, "odrzucone_dluzsza": 0, "odrzucone_crc": 0},
+    "ostatnia_poprawna_ramka": None,
+}
+_diag_historia = []      # (monotonic, poprawne, odrzucone) do liczenia "na minute"
+_diag_ostatni_zapis = 0.0
+
+
+def diag_ramka(ramka, crc_ok):
+    r = diag["razem"]
+    if crc_ok:
+        r["poprawne"] += 1
+        diag["ostatnia_poprawna_ramka"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        return
+    zadeklarowana = (ramka[1] | (ramka[2] << 8)) if len(ramka) >= 3 else None
+    if zadeklarowana is None or len(ramka) < zadeklarowana:
+        r["odrzucone_krotsza"] += 1
+    elif len(ramka) > zadeklarowana:
+        r["odrzucone_dluzsza"] += 1
+    else:
+        r["odrzucone_crc"] += 1
+
+
+def diag_zapisz():
+    global _diag_ostatni_zapis
+    teraz = time.monotonic()
+    if teraz - _diag_ostatni_zapis < DIAG_CO:
+        return
+    _diag_ostatni_zapis = teraz
+    r = diag["razem"]
+    odrz = r["odrzucone_krotsza"] + r["odrzucone_dluzsza"] + r["odrzucone_crc"]
+    _diag_historia.append((teraz, r["poprawne"], odrz))
+    while len(_diag_historia) > 1 and teraz - _diag_historia[0][0] > 60:
+        _diag_historia.pop(0)
+    t0, p0, o0 = _diag_historia[0]
+    okres = teraz - t0
+    diag["ostatnia_minuta"] = {
+        "okres_s": round(okres),
+        "poprawne": r["poprawne"] - p0,
+        "odrzucone": odrz - o0,
+    }
+    diag["timestamp"] = datetime.now().astimezone().isoformat(timespec="seconds")
+    tmp = DIAG_PLIK + ".tmp"
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(diag, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, DIAG_PLIK)
+    except OSError as e:
+        print(f"Błąd zapisu pliku {DIAG_PLIK}: {e}")
+
+
 # systemctl stop/restart wysyla SIGTERM - zamien go na normalne wyjscie, zeby
 # zadzialaly funkcje atexit (zapis oczekujacych polecen i pliku alarmu).
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
@@ -218,7 +279,15 @@ while True:
                 myCRC = ""
                 ramkaCRC = "1"
 
-            if myCRC == ramkaCRC:
+            # Sam XOR nie wystarcza: dwie poprawne ramki sklejone (zgubiony bajt 0x16)
+            # tez daja zgodny XOR. Dlatego sprawdzamy tez dlugosc z naglowka -
+            # we wszystkich 1097 ramkach z logu zgadzala sie co do bajta.
+            dlugosc_ok = len(ramka) >= 3 and (ramka[1] | (ramka[2] << 8)) == len(ramka)
+            ramka_ok = (myCRC == ramkaCRC) and dlugosc_ok
+            diag_ramka(ramka, ramka_ok)
+            diag_zapisz()
+
+            if ramka_ok:
 
                 ramkaHEX = [f'{ramka[i]:02X}' for i in range(0, len(ramka))]
                 message = ramka[MESSAGE_START:CRC_BYTE]

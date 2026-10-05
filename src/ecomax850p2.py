@@ -645,8 +645,9 @@ def parseFrame08(message):
         status_mixer_set
     )
     try:
-        with open(filename, 'w') as outfile:
+        with open(filename + ".tmp", 'w') as outfile:
             outfile.write(results)
+        os.replace(filename + ".tmp", filename)
     except OSError as e:
         print(f"Błąd zapisu pliku {filename}: {e}")
 
@@ -657,7 +658,8 @@ def parseFrame08(message):
     except OSError as e:
         print(f"Błąd zapisu pliku /data/message.txt: {e}")
 
-    timestamp = datetime.now().isoformat(timespec="seconds")
+    # ze strefa czasowa (np. 2026-10-05T08:12:03+02:00) - wymaga tego Home Assistant
+    timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
 
     # Surowe dane: sama ramka + metadane
     raw = {
@@ -722,9 +724,13 @@ def parseFrame08(message):
         },
     }
 
+    # Zapis przez plik tymczasowy + os.replace: czytelnik (all.php, piec_mqtt.py)
+    # nigdy nie trafi na w polowie zapisany plik.
     for path, payload in (("/data/message.json", raw), ("/data/odczyty.json", data)):
         try:
-            with open(path, 'w', encoding='utf-8') as fj:
+            tmp = path + ".tmp"
+            with open(tmp, 'w', encoding='utf-8') as fj:
                 json.dump(payload, fj, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)
         except (OSError, TypeError, ValueError) as e:
             print(f"Błąd zapisu pliku {path}: {e}")

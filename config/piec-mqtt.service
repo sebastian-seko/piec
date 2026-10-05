@@ -1,0 +1,18 @@
+[Unit]
+Description=Piec - publikator MQTT dla Home Assistant (tylko odczyt plikow parsera)
+After=network-online.target piec.service
+Wants=network-online.target
+
+[Service]
+User=root
+WorkingDirectory=/home/pi/piec/src
+ExecStart=/usr/bin/python3 /home/pi/piec/src/piec_mqtt.py
+Restart=always
+RestartSec=10
+# nizszy priorytet niz parser - nigdy nie konkuruje z lapaniem ramek
+Nice=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

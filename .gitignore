@@ -24,3 +24,7 @@ __pycache__/
 .idea/
 *.swp
 *.swo
+
+# Konfiguracja MQTT z haslem - prawdziwy plik jest w /etc/piec/mqtt.ini, nie w repo
+mqtt.ini
+config/mqtt.ini
