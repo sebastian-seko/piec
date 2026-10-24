@@ -70,6 +70,12 @@ Wyłączenie: `wlaczone = nie` w `/home/pi/mqtt.ini` i ponownie
 `piec/stan` zawiera wszystkie pola z `all.php` poza `timestamp` (to czas
 zapytania HTTP, w MQTT bez znaczenia). Czas ramki jest w polu `odczyt`.
 
+Temperatury (CWU, CO, zewnętrzna, palnik, mieszacz) w `piec/stan` są zaokrąglane
+do `zaokraglenie_temp` miejsc po przecinku (domyślnie 1, `-1` = wyłączone).
+Bez tego setne części stopnia drgają przy każdej ramce, `piec/stan` leci prawie
+co sekundę, a HA zapisuje tysiące wierszy historii na godzinę. Zaokrąglana jest
+tylko kopia wysyłana do brokera; `/data/odczyty.json` i `all.php` mają pełną dokładność.
+
 ### Zdarzenia po przerwie w łączności
 
 Zdarzenia (`zdarzenia/*`) nie giną, gdy tunel padnie. Publikator zapamiętuje

@@ -17,6 +17,10 @@ tls = nie
 # sekundy; po ok. 1,5 x keepalive bez kontaktu broker ogłosi piec/polaczenie = offline
 keepalive = 30
 
+# miejsca po przecinku dla temperatur wysyłanych do MQTT (mniej zapisów w historii HA);
+# dotyczy tylko MQTT - odczyty.json i all.php zostają dokładne. -1 = bez zaokrąglania
+zaokraglenie_temp = 1
+
 client_id = piec-kpol
 prefiks = piec
 discovery_prefiks = homeassistant

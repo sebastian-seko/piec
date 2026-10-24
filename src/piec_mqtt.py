@@ -95,6 +95,23 @@ def plaski_stan(d):
     }
 
 
+# Temperatury z parsera maja setne czesci stopnia, wiec drgaja przy kazdej ramce
+# i HA zapisuje do historii nowy wiersz prawie co sekunde. Zaokraglamy je TYLKO
+# w kopii wysylanej do MQTT - pliki parsera (odczyty.json, all.php) zostaja dokladne.
+TEMPERATURY = ("cwu", "co", "dwor", "palnik", "mieszacz")
+
+
+def zaokraglij_temperatury(stan, miejsca):
+    if miejsca is None or miejsca < 0:
+        return stan
+    wynik = dict(stan)
+    for k in TEMPERATURY:
+        v = wynik.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            wynik[k] = round(v, miejsca)
+    return wynik
+
+
 def wiek_s(iso):
     try:
         return round(time.time() - datetime.fromisoformat(iso).timestamp())
@@ -193,6 +210,8 @@ class Publikator:
         self.host = m.get("host")
         self.port = m.getint("port", fallback=1883)
         self.keepalive = m.getint("keepalive", fallback=30)
+        # miejsca po przecinku dla temperatur w MQTT; -1 = bez zaokraglania
+        self.miejsca_temp = m.getint("zaokraglenie_temp", fallback=1)
         self.poz = czytaj_json(POZYCJA) or {}
 
     # --- polaczenie (callbacki dzialaja w watku paho) ---
@@ -280,7 +299,8 @@ class Publikator:
         d = czytaj_json(ODCZYTY)
         if d is None and os.path.exists(ODCZYTY):
             return          # plik chwilowo nieczytelny - sprobuj w nastepnym obiegu
-        stan = plaski_stan(d) if d and "odczyty" in d else None
+        stan = (zaokraglij_temperatury(plaski_stan(d), self.miejsca_temp)
+                if d and "odczyty" in d else None)
         wiek = wiek_s(stan["odczyt"]) if stan else None
         status = "online" if (wiek is not None and wiek <= DANE_NIEAKTUALNE_S) else "offline"
 
