@@ -55,7 +55,7 @@ Partycja RAM o rozmiarze 1 MB, automatycznie montowana przy starcie:
 - `parametry.json` — ostatnia tabela nastaw sterownika (191 parametrów: wartość, min, max)
 - `parametry/parametry_*.json` — każda odebrana tabela (migawki, max 1000)
 - `parametry_zmiany.jsonl` — które parametry zmieniły się między kolejnymi tabelami
-- `kasowanie_alarmu.log` — dziennik ręcznego narzędzia `narzedzia/kasuj_alarm.py`
+- `sterowanie.log` — dziennik ręcznego narzędzia `narzedzia/sterowanie.py`
 
 #### Jak nazwać kolejne parametry
 
@@ -67,7 +67,7 @@ co oznacza dany numer:
    z wartościami `bylo` → `jest` (oraz w `polecenia.jsonl` ramka 0x70 z tym numerem),
 3. dopisz nazwę w `src/ecomax850p2.py` → `PARAMETRY_NAZWY`.
 
-Znane dziś: 49 = temperatura zadana CO, 52 = temperatura zadana CWU.
+Znane dziś: 49 = temperatura zadana CO, 52 = temperatura zadana CWU, 68 = temperatura zadana mieszacza.
 
 ### MQTT / Home Assistant
 
@@ -79,8 +79,9 @@ w `/home/pi/mqtt.ini`, opis: [MQTT.md](MQTT.md).
 
 ### Narzędzia ręczne
 
-`narzedzia/kasuj_alarm.py` — eksperymentalne ręczne kasowanie alarmu przez RS-485.
-Nie uruchamia się automatycznie. Opis, ryzyka i procedura: [narzedzia/README.md](narzedzia/README.md).
+`narzedzia/sterowanie.py` — eksperymentalne ręczne sterowanie przez RS-485: włącz, wyłącz,
+skasuj alarm. Nie uruchamia się automatycznie (podgląd domyślnie, wysyłka po wpisaniu TAK).
+Opis, ryzyka i procedura: [narzedzia/README.md](narzedzia/README.md).
 
 ### Port szeregowy
 

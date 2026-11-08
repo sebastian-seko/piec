@@ -53,7 +53,8 @@ def opis_alarmu(kod):
 # (typ = typ polecenia + 0x80). Zaobserwowane pary:
 #   0x70 -> 0xF0  zmiana parametru, np. [1, 49, 65] = parametr 49 (zadana CO) na 65
 #   0x61 -> 0xE1  odczyt tabeli parametrow: [255, 0] -> [ile, od_nr, (wart, min, max) * ile]
-#   0x71 -> 0xF1  polecenie, np. [3, 32, 0] = kasowanie alarmu 32; [2] = nieznane
+#   0x71 -> 0xF1  polecenie: [1] = wlacz, [2] = wylacz,
+#                 [3, kod, 0] = kasowanie alarmu; naglowek panelu: 50 B0 07
 ADRES_PIECA = 0x45
 POLECENIA_PLIK = "/home/pi/piec_dane/polecenia.jsonl"   # karta SD, przetrwa restart
 POLECENIE_STAN_PO_S = 10    # po ilu sekundach zapisac stan pieca "po" poleceniu
@@ -71,6 +72,8 @@ PARAMETRY_MAX_MIGAWEK = 1000
 PARAMETRY_NAZWY = {
     49: {"nazwa": "Temperatura zadana CO", "zrodlo": "zgodna z bajtem 154 ramki 0x08 (65)"},
     52: {"nazwa": "Temperatura zadana CWU", "zrodlo": "zgodna z bajtem 153 ramki 0x08 (45)"},
+    68: {"nazwa": "Temperatura zadana mieszacza",
+         "zrodlo": "zmiany z panelu 06.11.2026: 25 -> 30 -> 35; HA zadana_mieszacza = 35, w X.2026 obie = 45"},
 }
 
 
@@ -103,8 +106,12 @@ def dekoduj_polecenie(typ, message):
     if typ == 0x71:
         if len(dane) >= 2 and dane[0] == 3:
             return f"kasowanie alarmu {dane[1]} ({opis_alarmu(dane[1])})", "kasowanie_alarmu"
-        if dane[:1] == [2]:
-            return "polecenie 0x71 [2] - nieznane (panel wysyła je po kasowaniu alarmu)", "nieznane"
+        # [1] = wlaczenie: 06.11.2026 16:27:38 WYLACZONY -> CZYSZCZENIE (start pieca)
+        # [2] = wylaczenie: 06.11.2026 16:31:20 ROZPALANIE -> WYGASZANIE
+        if dane == [1]:
+            return "włączenie pieca (z panelu)", "wlaczenie"
+        if dane == [2]:
+            return "wyłączenie pieca (z panelu)", "wylaczenie"
         return f"polecenie 0x71 {dane} - nieznane", "nieznane"
     if typ == 0xF1:
         return f"odpowiedź pieca na polecenie 0x71 {dane}", "odpowiedz"

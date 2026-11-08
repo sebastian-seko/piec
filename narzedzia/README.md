@@ -1,103 +1,112 @@
-# Narzędzia ręczne — kasowanie alarmu
+# Narzędzia ręczne — sterowanie piecem
 
-> **Narzędzie eksperymentalne.** Wysyła polecenie do sterownika kotła. Nic w tym
-> katalogu nie uruchamia się samo: usługa `piec`, `install.sh` ani żaden cron
-> go nie wywołują. Każde użycie to Twoja świadoma decyzja przy terminalu.
+> **Narzędzie eksperymentalne.** Wysyła polecenia do sterownika kotła. Nic w tym
+> katalogu nie uruchamia się samo: usługa `piec`, `piec-mqtt`, `install.sh`, cron
+> ani Home Assistant go nie wywołują. Każde użycie to Twoja decyzja przy terminalu (SSH).
 
 ## Spis
 
-- [Co robi `kasuj_alarm.py`](#co-robi-kasuj_alarmpy)
+- [Co robi `sterowanie.py`](#co-robi-sterowaniepy)
 - [Zanim użyjesz — bezpieczeństwo](#zanim-użyjesz--bezpieczeństwo)
-- [Procedura krok po kroku](#procedura-krok-po-kroku)
-- [Opcje](#opcje)
+- [Użycie](#użycie)
+- [Kiedy skrypt odmówi](#kiedy-skrypt-odmówi)
 - [Kody wyjścia](#kody-wyjścia)
 - [Co wiemy o protokole, a co jest zgadnięte](#co-wiemy-o-protokole-a-co-jest-zgadnięte)
 - [Gdy się nie uda](#gdy-się-nie-uda)
 - [Pliki](#pliki)
 
-## Co robi `kasuj_alarm.py`
+## Co robi `sterowanie.py`
 
-Wysyła na magistralę RS-485 **jedną** ramkę „skasuj alarm” — taką samą, jaką
-panel ecoSTER wysłał 04.10.2026 o 01:17:11, gdy alarm 32 został skasowany z
-panelu. Potem przez 30 s obserwuje, czy piec odpowiedział i wyszedł z alarmu.
+Wysyła na magistralę RS-485 **jedną** ramkę — dokładnie taką, jaką wysyła panel
+ecoSTER, gdy naciskasz przycisk (bajt w bajt identyczną z ramkami złapanymi od panelu):
 
-Bezpieczniki wbudowane w skrypt:
+| polecenie | ramka | oczekiwany efekt |
+|---|---|---|
+| `wlacz` | `68 0B 00 45 50 B0 07 71 01 B1 16` | WYŁĄCZONY → CZYSZCZENIE → ROZPALANIE |
+| `wylacz` | `68 0B 00 45 50 B0 07 71 02 B2 16` | → WYGASZANIE → WYŁĄCZONY |
+| `kasuj --kod 32` | `68 0D 00 45 50 B0 07 71 03 20 00 95 16` | ALARM → wyjście z alarmu (kolejne rozpalanie) |
 
-| bezpiecznik | zachowanie |
-|---|---|
-| tryb podglądu | bez `--wyslij` skrypt tylko słucha i mówi, co by zrobił |
-| potwierdzenie | z `--wyslij` trzeba wpisać `TAK`; bez terminala (cron, skrypt) odmawia |
-| stan pieca | wysyła tylko, gdy piec jest w ALARM **z kodem podanym w `--kod`**; sprawdza to dwa razy, drugi raz tuż przed nadaniem |
-| lista kodów | kod musi być na liście `DOZWOLONE_KODY` w skrypcie (obecnie tylko `32`) |
-| limit | najwyżej jedna wysyłka na 60 min (wg dziennika) |
-| jedna próba | nigdy nie ponawia, nawet gdy się nie uda |
-| port | odmawia, gdy działa usługa `piec` (oba procesy czytałyby ten sam port i psuły sobie dane) |
+Przebieg z `--wyslij`:
+
+1. odczyt stanu pieca z `/data/odczyty.json` (bez dotykania portu i usługi) i sprawdzenie warunków,
+2. sprawdzenie limitu czasowego,
+3. ostrzeżenie i **wpisanie `TAK`**,
+4. zatrzymanie usługi `piec` (zwalnia port),
+5. ponowne sprawdzenie stanu **na żywo z magistrali**,
+6. nadanie w wolnym okienku, zapis do dziennika,
+7. obserwacja (do 60 s, krócej gdy cel osiągnięty): odpowiedź pieca `0xF1` i zmiana stanu,
+8. **zawsze** ponowne uruchomienie usługi `piec` — także po błędzie i Ctrl+C.
+
+Przerwa w odczytach (HA, alarmy) trwa zwykle 15–40 s.
 
 ## Zanim użyjesz — bezpieczeństwo
 
-Alarm 32 to najpewniej **nieudane rozpalenie** (wniosek z dwóch takich samych
-zdarzeń: 27.12.2024 i 04.10.2026 — w obu palnik zimny, płomień 0, alarm prosto
-z ROZPALANIA). Sterownik zatrzymuje się właśnie po to, żeby ktoś sprawdził palnik.
+`wlacz` i `kasuj` uruchamiają **rozpalanie**, gdy nikt nie stoi przy kotle.
 
-Skasowanie alarmu = **kolejna próba rozpalenia**, często z pelletem, który już
-leży w palniku. W złym scenariuszu: dużo dymu albo zapłon nagromadzonych gazów
-w komorze. Dlatego:
+- Alarm 32 to najpewniej **nieudane rozpalenie**. Skasowanie = kolejna próba, często
+  z pelletem, który już leży w palniku. W złym scenariuszu: dużo dymu albo zapłon
+  nagromadzonych gazów w komorze. Po drugim nieudanym rozpaleniu idź do kotła.
+- Zdalnie włączaj tylko, jeśli wiesz, w jakim stanie jest kocioł (pellet w zasobniku,
+  palnik wyczyszczony, nic nie zostało zalane).
+- `wylacz` jest bezpiecznym kierunkiem — piec sam przechodzi przez wygaszanie.
+- Pierwszy test każdego polecenia zrób przy piecu.
 
-- kasuj zdalnie tylko, jeśli wiesz, dlaczego rozpalenie się nie udało (np. pusty zasobnik, który już uzupełniłeś),
-- nie kasuj kilka razy z rzędu — po drugim nieudanym rozpaleniu idź do kotła,
-- pierwszy test zrób, stojąc przy piecu.
-
-## Procedura krok po kroku
+## Użycie
 
 Na Raspberry Pi, w `/home/pi/piec/narzedzia`:
 
 ```bash
-# 1. Zatrzymaj usługę (zwalnia port /dev/ttyUSB0)
-sudo systemctl stop piec
+# podgląd - pokazuje stan i ramkę, NIC nie wysyła, nie dotyka portu ani usługi
+python3 sterowanie.py wlacz
+python3 sterowanie.py wylacz
+python3 sterowanie.py kasuj --kod 32
 
-# 2. Podgląd — nic nie wysyła, sprawdza stan i kod alarmu
-sudo python3 kasuj_alarm.py --kod 32
-
-# 3. Wysyłka — pyta o TAK, wysyła jedną ramkę, obserwuje 30 s
-sudo python3 kasuj_alarm.py --kod 32 --wyslij
-
-# 4. ZAWSZE uruchom usługę z powrotem
-sudo systemctl start piec
+# wysyłka - pyta o TAK, sama zatrzymuje i przywraca usługę piec
+sudo python3 sterowanie.py wlacz --wyslij
+sudo python3 sterowanie.py wylacz --wyslij
+sudo python3 sterowanie.py kasuj --kod 32 --wyslij
 ```
 
-Same bajty ramki, bez otwierania portu:
-
-```bash
-python3 kasuj_alarm.py --kod 32 --tylko-ramka
-```
-
-## Opcje
+Opcje:
 
 | opcja | znaczenie |
 |---|---|
-| `--kod N` | wymagane; kod alarmu do skasowania (musi zgadzać się z bieżącym alarmem) |
-| `--wyslij` | naprawdę wyślij (bez tego: podgląd) |
+| `--wyslij` | naprawdę wyślij (wymaga `sudo` i wpisania `TAK`) |
+| `--kod N` | kod alarmu dla `kasuj` — musi zgadzać się z bieżącym alarmem |
 | `--jako panel` | domyślnie; nadaje jako panel ecoSTER (0x50) |
 | `--jako econet` | nadaje jako moduł ecoNET (0x56) — patrz niżej |
-| `--tylko-ramka` | wypisz bajty ramki i zakończ |
-| `--obserwuj S` | ile sekund obserwować po wysłaniu (domyślnie 30) |
+| `--obserwuj S` | maks. sekund obserwacji po wysłaniu (domyślnie 60) |
 | `--port P` | port szeregowy (domyślnie `/dev/ttyUSB0`) |
+
+## Kiedy skrypt odmówi
+
+| polecenie | wolno tylko gdy | limit |
+|---|---|---|
+| `wlacz` | stan WYŁĄCZONY i brak kodu alarmu | wspólny z `kasuj`: 1 na 30 min |
+| `wylacz` | ROZPALANIE, PRACA, POSTÓJ, PRACA RĘCZNA, CZYSZCZENIE | 1 na 2 min |
+| `kasuj` | ALARM z kodem = `--kod`, kod na liście `DOZWOLONE_KODY` (dziś: 32) | wspólny z `wlacz`: 1 na 30 min |
+
+Oraz zawsze, gdy: dane parsera są starsze niż 120 s, brak terminala (cron/skrypt),
+brak `sudo`, stan na magistrali różni się od tego z pliku, brak wolnego okienka w 10 s.
+
+Wspólny limit dla `wlacz` i `kasuj`: oba uruchamiają rozpalanie, więc nie da się
+zrobić „włącz, nie wyszło, kasuj, włącz…” w kółko.
 
 ## Kody wyjścia
 
 | kod | znaczenie |
 |---|---|
-| 0 | podgląd OK albo alarm skasowany |
-| 2 | kod spoza listy, działa usługa `piec` albo nie da się otworzyć portu |
-| 3 | brak ramek od pieca albo piec nie jest w ALARM z tym kodem |
-| 4 | limit — za wcześnie od poprzedniej wysyłki |
+| 0 | podgląd OK albo polecenie przyjęte (stan zmienił się zgodnie z oczekiwaniem) |
+| 2 | błąd użycia: kod spoza listy, brak sudo, nie da się zatrzymać usługi / otworzyć portu |
+| 3 | stan pieca nie pozwala (z pliku albo na żywo) / brak świeżych danych |
+| 4 | limit czasowy |
 | 5 | nie wpisano `TAK` |
 | 6 | nie znaleziono momentu nadania w 10 s |
-| 7 | wysłano, ale piec nadal w alarmie |
+| 7 | wysłano, ale stan się nie zmienił |
 
 ## Co wiemy o protokole, a co jest zgadnięte
 
-Budowa ramki (pewne — tak samo liczy `src/start.py`, zweryfikowane na 1097 ramkach z logu):
+Budowa ramki (pewne — zweryfikowane na 1097 ramkach z logu i ramkach panelu):
 
 ```
 68 | dł.L dł.H | odbiorca | nadawca | typ nadawcy | wersja | typ ramki | dane... | CRC | 16
@@ -106,52 +115,49 @@ Budowa ramki (pewne — tak samo liczy `src/start.py`, zweryfikowane na 1097 ram
 - długość = liczba bajtów całej ramki,
 - CRC = XOR wszystkich bajtów przed CRC, łącznie z `68`.
 
-Ramka kasowania alarmu 32 jako panel:
-
-```
-68 0D 00 45 50 B0 07 71 03 20 00 95 16
-```
-
-| element | wartość | pewność |
+| element | skąd wiemy | pewność |
 |---|---|---|
-| typ ramki `0x71`, dane `[3, 32, 0]` | zaobserwowane u Ciebie 04.10.2026 01:17:11 | pewne, że panel to wysłał w chwili końca alarmu |
-| `3` = „kasuj alarm”, `32` = kod | wniosek z jednej obserwacji | prawdopodobne |
-| odpowiedź pieca `0xF1` | zaobserwowana | pewne |
-| nagłówek panelu `B0 07` (typ nadawcy, wersja) | wzięte z ramek 0x89 panelu | prawdopodobne; parser zapisuje teraz pełne ramki, więc przy następnym kasowaniu z panelu sprawdzisz w `/home/pi/piec_dane/polecenia.jsonl` (pole `ramka_pelna`) |
-| ramka `0x71 [2]` wysyłana przez panel 10 s po kasowaniu | zaobserwowana | **znaczenie nieznane**; skrypt jej nie wysyła |
-| nagłówek ecoNET `30 07` | `30` z oryginalnego kodu econetanalyze, `07` zgadnięte | niepewne |
+| `0x71 [1]` = włącz | 06.11.2026 16:27:38: WYŁĄCZONY → CZYSZCZENIE | pewne |
+| `0x71 [2]` = wyłącz | 06.11.2026 16:31:20: ROZPALANIE → WYGASZANIE | pewne |
+| `0x71 [3, kod, 0]` = kasuj alarm | 04.10.2026 01:17:11: koniec alarmu 32 w tej samej sekundzie | prawdopodobne (jedna obserwacja) |
+| odpowiedź pieca `0xF1` na każde `0x71` | wszystkie obserwacje | pewne |
+| nagłówek panelu `50 B0 07` | pełne ramki panelu z 06.11.2026 | pewne |
+| piec przyjmie ramkę od nas tak jak od panelu | — | **do sprawdzenia przy pierwszym użyciu** |
+| nagłówek ecoNET `56 30 07` | `30` z oryginalnego econetanalyze, `07` zgadnięte | niepewne |
 
 **Moment nadania.** RS-485 to jedna para przewodów; naraz może nadawać jedno
-urządzenie. Piec (0x45) jest masterem i co ok. 1 s odpytuje kolejne adresy:
+urządzenie. Piec (0x45) jest masterem i ok. 1,2 razy na sekundę odpytuje kolejne adresy.
 
-- `--jako panel`: prawdziwy panel odpowiada co cykl (ramka 0x89). Skrypt czeka,
-  aż panel skończy swoją ramkę, i nadaje zaraz po niej. Jeśli piec zaczyna
-  nadawać natychmiast po panelu, ramki mogą się zderzyć — wtedy skrypt zgłosi
-  brak efektu (kod 7).
-- `--jako econet`: piec odpytuje adres 0x56 (typ 0x30) i nikt nie odpowiada —
-  skrypt nadaje w tym pustym okienku, więc kolizji nie ma. **Nie wiadomo**, czy
-  piec przyjmie polecenie od tego adresu.
+- `--jako panel`: prawdziwy panel odpowiada co cykl. Skrypt czeka, aż panel skończy
+  swoją ramkę, i nadaje zaraz po niej. Jeśli piec zacznie nadawać w tej samej chwili,
+  ramki się zderzą — wtedy skrypt zgłosi brak efektu (kod 7).
+- `--jako econet`: piec odpytuje adres 0x56 i nikt nie odpowiada — skrypt nadaje
+  w tym pustym okienku, więc kolizji nie ma. **Nie wiadomo**, czy piec przyjmie
+  polecenie od tego adresu.
 
 **Echo.** Wiele przejściówek USB-RS485 odbiera własną transmisję. `echo=True`
-w wyniku oznacza, że bajty wyszły na magistralę — to dobry znak dla przejściówki,
-ale nie znaczy, że piec je przyjął. O tym mówi `odpowiedz_F1` i zmiana stanu.
+oznacza, że bajty wyszły na magistralę — ale nie, że piec je przyjął. O tym mówi
+`odpowiedz_F1` i zmiana stanu.
 
 ## Gdy się nie uda
 
-Skrypt nie ponawia. Kolejność sprawdzania:
+Skrypt nie ponawia. Kolejność sprawdzania (wynik jest w dzienniku):
 
 1. `echo=False` — przejściówka nie nadaje albo nie przełącza kierunku (potrzebna automatyczna obsługa DE/RE).
-2. `echo=True`, brak `0xF1` — kolizja albo piec nie akceptuje nadawcy/nagłówka. Po upływie limitu można spróbować `--jako econet`.
-3. Jest `0xF1`, ale nadal ALARM — polecenie przyjęte, ale nie zadziałało (inny kod, brakujące `0x71 [2]` itp.). Skasuj z panelu i porównaj w `polecenia.jsonl` pełne ramki panelu z naszą.
+2. `echo=True`, brak `0xF1` — kolizja albo piec nie akceptuje nadawcy. Po upływie limitu spróbuj ponownie albo `--jako econet`.
+3. Jest `0xF1`, ale stan bez zmian — polecenie przyjęte, ale nie zadziałało. Wykonaj to samo z panelu
+   i porównaj w `/home/pi/piec_dane/polecenia.jsonl` pełną ramkę panelu z naszą.
 
 ## Pliki
 
 | plik | co to |
 |---|---|
-| `/home/pi/piec_dane/kasowanie_alarmu.log` | dziennik wysyłek tego skryptu (z niego liczony jest limit) |
-| `/home/pi/piec_dane/polecenia.jsonl` | zapisywany przez usługę `piec`: każda ramka spoza cyklicznego odpytywania — polecenia z panelu (0x70, 0x61, 0x71…) i odpowiedzi pieca (0xF0, 0xE1, 0xF1…), z pełną ramką i stanem pieca przed/po |
-| `/home/pi/piec_dane/parametry.json`, `parametry_zmiany.jsonl` | tabela nastaw sterownika i dziennik jej zmian (tylko odczyt — ten skrypt niczego w niej nie zmienia) |
-| `/home/pi/piec_dane/alarmy/alarm_*.json` | historia alarmów; pole `sposob_zakonczenia` mówi, czy alarm skasowano poleceniem, czy minął sam |
+| `/home/pi/piec_dane/sterowanie.log` | dziennik wysyłek (`WYSLANO …` i `WYNIK …`); z niego liczone są limity |
+| `/home/pi/piec_dane/polecenia.jsonl` | zapisywany przez usługę `piec`: każde polecenie z panelu i odpowiedź pieca, z pełną ramką i stanem przed/po |
+| `/home/pi/piec_dane/alarmy/alarm_*.json` | historia alarmów; `sposob_zakonczenia` mówi, czy alarm skasowano poleceniem |
 
-Kody alarmów i ich opisy są w `src/ecomax850p2.py` → `ALARM_KODY`. Gdy
-potwierdzisz opis z panelu, ustaw tam `"potwierdzony": True`.
+Polecenia wysłane tym skryptem **nie** trafią do `polecenia.jsonl` — na czas
+wysyłki parser jest zatrzymany. Są w `sterowanie.log`.
+
+Kody alarmów i opisy: `src/ecomax850p2.py` → `ALARM_KODY`. Dozwolone do kasowania:
+`narzedzia/sterowanie.py` → `DOZWOLONE_KODY`.

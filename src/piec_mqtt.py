@@ -112,6 +112,23 @@ def zaokraglij_temperatury(stan, miejsca):
     return wynik
 
 
+def czekaj_na_publikacje(info, timeout):
+    """Czeka na potwierdzenie brokera (QoS 1), maks. timeout s. Dziala z paho 1.5 / 1.6 / 2.x.
+    paho < 1.6 nie ma parametru timeout w wait_for_publish() (a bez niego czeka w nieskonczonosc),
+    wiec tam sprawdzamy is_published() w petli."""
+    if getattr(info, "rc", 0) != 0:
+        return False
+    try:
+        info.wait_for_publish(timeout)
+    except TypeError:
+        koniec = time.monotonic() + timeout
+        while not info.is_published() and time.monotonic() < koniec:
+            time.sleep(0.05)
+    except (RuntimeError, ValueError):
+        return False
+    return info.is_published()
+
+
 def wiek_s(iso):
     try:
         return round(time.time() - datetime.fromisoformat(iso).timestamp())
@@ -194,6 +211,7 @@ class Publikator:
         self.parametry_mtime = None
         self.alarmy_mtime = {}
         self.zalegle = 0
+        self._bledy = {}          # ostatnie zgloszenie danego bledu (ograniczenie logow)
 
         try:   # paho 2.x
             self.c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=self.uid)
@@ -230,6 +248,13 @@ class Publikator:
             log(f"Rozłączono z brokerem ({args[-2] if len(args) >= 2 else args})")
         self.polaczony = False
 
+    def _blad(self, gdzie, e):
+        klucz = f"{gdzie}: {e!r}"
+        teraz = time.monotonic()
+        if teraz - self._bledy.get(klucz, -1e9) >= 600:
+            self._bledy[klucz] = teraz
+            log(f"Błąd ({gdzie}): {e!r}")
+
     def start(self):
         self.c.connect_async(self.host, self.port, keepalive=self.keepalive)
         self.c.loop_start()
@@ -237,7 +262,7 @@ class Publikator:
     def stop(self):
         try:
             if self.polaczony:
-                self.c.publish(self.t_polaczenie, "offline", qos=1, retain=True).wait_for_publish(3)
+                czekaj_na_publikacje(self.c.publish(self.t_polaczenie, "offline", qos=1, retain=True), 3)
         except Exception:
             pass
         self.c.disconnect()
@@ -252,10 +277,9 @@ class Publikator:
         if not self.polaczony:
             return False
         try:
-            info = self.pub(temat, dane, qos=1)
-            info.wait_for_publish(5)
-            return info.is_published()
-        except (RuntimeError, ValueError):
+            return czekaj_na_publikacje(self.pub(temat, dane, qos=1), 5)
+        except Exception as e:     # nigdy nie blokuj reszty obiegu (stanu, diagnostyki)
+            self._blad("wysyłka zdarzenia", e)
             return False
 
     # --- discovery ---
@@ -332,7 +356,12 @@ class Publikator:
                                   for x in p.get("parametry", [])}}, retain=True, qos=1)
             self.parametry_mtime = mt
 
-        self.zalegle = self.wyslij_polecenia() + self.wyslij_alarmy()
+        # Zdarzenia w osobnym try: blad tutaj nie moze zatrzymac diagnostyki
+        # (tak bylo 06.11.2026 na paho 1.5 - diagnostyka stala 2 dni).
+        try:
+            self.zalegle = self.wyslij_polecenia() + self.wyslij_alarmy()
+        except Exception as e:
+            self._blad("zdarzenia", e)
 
         if teraz - self.ostatnia_diag_t >= DIAG_CO_S:
             self.ostatnia_diag_t = teraz

@@ -196,8 +196,9 @@ nazw nadanych przez HA). Sprawdź je w Ustawienia → Encje → filtr „piec_kp
 
 ## Dane techniczne
 
-- Biblioteka `paho-mqtt` 1.6 (Raspberry Pi OS Bookworm) i 2.x (nowsze). Kod
-  obsługuje obie i obie były testowane.
+- Biblioteka `paho-mqtt` 1.5 (Raspberry Pi OS Bullseye), 1.6 (Bookworm) i 2.x.
+  Kod obsługuje wszystkie trzy i wszystkie były testowane. (Do 08.11.2026 na 1.5
+  wysyłka zdarzeń kończyła się błędem i blokowała diagnostykę - poprawione.)
 - Ponowne łączenie: co 1 s, potem coraz rzadziej, najwyżej co 60 s.
 - Konfiguracja: `/home/pi/mqtt.ini` (szablon `config/mqtt.ini.example`),
   usługa: `config/piec-mqtt.service`.
