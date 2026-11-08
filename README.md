@@ -44,6 +44,7 @@ Partycja RAM o rozmiarze 1 MB, automatycznie montowana przy starcie:
 - `/data/odczyty.json` — aktualne odczyty z nazwanymi polami (z tego czyta web)
 - `/data/message.txt` / `/data/message.json` — surowa ostatnia ramka ecoMAX
 - `/data/nieznane.json` — ostatnia ramka każdego nieobsługiwanego rodzaju
+- `/data/panel.json` — zegar panelu ecoSTER (ramka 0x89 „TIME”) i odchyłka względem zegara Pi
 - `/data/raw.txt` — dane wejściowe (jeśli `SOURCE = 'FILE'`)
 
 ### Katalog `/home/pi/piec_dane/` (karta SD, przetrwa restart)

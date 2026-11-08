@@ -73,6 +73,7 @@ def mtime(sciezka):
 def plaski_stan(d):
     o, s, w = d["odczyty"], d["serwis"], d["wyjscia"]
     a = d.get("alarm") or {}
+    pz = d.get("panel") or {}
     return {
         "cwu": o["cwu"], "co": o["co"], "dwor": o["dwor"], "palnik": o["palnik"],
         "mieszacz": o["mieszacz"], "stan": o["stan"],
@@ -91,6 +92,8 @@ def plaski_stan(d):
         "alarm": bool(a.get("aktywny")), "alarm_kod": a.get("kod"),
         "alarm_opis": a.get("opis"), "alarm_bajt_198": a.get("bajt_198"),
         "wyjscia2": a.get("wyjscia2"),
+        "zegar_panelu": pz.get("zegar"),
+        "odchylka_zegara_s": pz.get("odchylka_s"),
         "odczyt": d.get("timestamp"),
     }
 
@@ -168,9 +171,17 @@ SENSORY = [
     ("alarm_kod", "Kod alarmu", {"icon": "mdi:alert-circle-outline"}),
     ("alarm_opis", "Opis alarmu", {"icon": "mdi:alert-circle-outline"}),
     ("odczyt", "Ostatni odczyt", {"device_class": "timestamp"}),
+    ("odchylka_zegara_s", "Odchyłka zegara panelu", {"unit_of_measurement": "s", "state_class": "measurement",
+                                                     "icon": "mdi:clock-alert-outline"}),
     ("alarm_bajt_198", "Alarm bajt 198", {**DIAGN, "icon": "mdi:bug-outline"}),
     ("wyjscia2", "Wyjścia (bajt 29)", {**DIAGN, "icon": "mdi:bug-outline"}),
 ]
+# Encje kiedys ogloszone, a dzis niepotrzebne - przy kazdym polaczeniu wysylamy pusta
+# konfiguracje, zeby HA je usunal (gdyby zdazyly powstac).
+# zegar_panelu: zmienia sie co sekunde, zasmiecalby baze HA; wystarczy odchylka.
+# Sam zegar zostaje w piec/stan (JSON), all.php i odczyty.json.
+USUNIETE = [("sensor", "zegar_panelu")]
+
 BINARNE = [
     ("alarm", "Alarm", {"device_class": "problem"}),
     ("pompa_piec", "Pompa CO", {"device_class": "running"}),
@@ -298,6 +309,9 @@ class Publikator:
         for klucz, nazwa, extra in BINARNE:
             self._disc("binary_sensor", klucz, nazwa, f"{self.prefiks}/stan",
                        "{{ 'ON' if value_json.%s else 'OFF' }}" % klucz, {**wspolne, **extra})
+        for komponent, klucz in USUNIETE:
+            uid = f"{self.uid}_{klucz}".replace("-", "_")
+            self.c.publish(f"{self.disc}/{komponent}/{uid}/config", "", qos=1, retain=True)
         for klucz, nazwa, extra in DIAG_SENSORY:
             self._disc("sensor", "diag_" + klucz, nazwa, f"{self.prefiks}/diag",
                        "{{ value_json.%s }}" % klucz, {**wspolne_diag, **extra})
@@ -337,7 +351,8 @@ class Publikator:
             self.ostatni_status = status
 
         if stan is not None:
-            bez_czasu = {k: v for k, v in stan.items() if k != "odczyt"}
+            # pola zmieniajace sie co sekunde nie wymuszaja publikacji (i tak co STAN_CO_S)
+            bez_czasu = {k: v for k, v in stan.items() if k not in ("odczyt", "zegar_panelu")}
             if bez_czasu != self.ostatni_stan or teraz - self.ostatni_stan_t >= STAN_CO_S:
                 self.pub("stan", stan, retain=True)
                 self.ostatni_stan, self.ostatni_stan_t = bez_czasu, teraz

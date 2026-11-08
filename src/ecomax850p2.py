@@ -293,6 +293,19 @@ _brudny = False             # epizod zmieniony od ostatniego zapisu
 _bufor = deque(maxlen=ALARM_BUFOR)   # (monotonic, dict ramki)
 
 
+def _zegar_panelu():
+    """Zegar panelu z /data/panel.json (zapisuje ecoster.py) albo None, gdy brak / starszy niz 60 s."""
+    try:
+        with open("/data/panel.json", encoding="utf-8") as f:
+            p = json.load(f)
+        if time.time() - datetime.fromisoformat(p["odczyt"]).timestamp() > 60:
+            return None
+        return {"zegar": p["zegar_panelu"], "odchylka_s": p["odchylka_s"],
+                "dzien_tygodnia": p.get("dzien_tygodnia")}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 def _bajt(message, i):
     return message[i] if 0 <= i < len(message) else None
 
@@ -729,6 +742,7 @@ def parseFrame08(message):
             "wyjscia2": _bajt(message, OUTPUTS2_byte),
             "wyjscia2_bity": f"{_bajt(message, OUTPUTS2_byte):08b}" if _bajt(message, OUTPUTS2_byte) is not None else None,
         },
+        "panel": _zegar_panelu(),
     }
 
     # Zapis przez plik tymczasowy + os.replace: czytelnik (all.php, piec_mqtt.py)

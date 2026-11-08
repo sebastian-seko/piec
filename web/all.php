@@ -48,6 +48,8 @@ $result = [
     "alarm_opis" => $data['alarm']['opis'] ?? null,
     "alarm_bajt_198" => $data['alarm']['bajt_198'] ?? null,
     "wyjscia2" => $data['alarm']['wyjscia2'] ?? null,
+    "zegar_panelu" => $data['panel']['zegar'] ?? null,
+    "odchylka_zegara_s" => $data['panel']['odchylka_s'] ?? null,
     "odczyt" => $data['timestamp'],
     "timestamp" => date('c')
 ];

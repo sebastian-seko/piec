@@ -99,7 +99,10 @@ Wszystkie pod urządzeniem **Piec Kpol**. Identyfikatory HA nada sam, np.
 - **Sensory:** temperatury (CWU, CO, zewnętrzna, palnik, mieszacz), zadane (CO, CWU,
   mieszacza), nadmuch, otwarcie mieszacza, płomień, moc, strumień paliwa,
   godziny pracy (100/50/30%, podajnik), liczba rozpaleń, stan, status mieszacza,
-  kod i opis alarmu, ostatni odczyt.
+  kod i opis alarmu, ostatni odczyt, odchyłka zegara panelu od zegara Pi
+  (np. ok. 3600 s = panel nie przestawił się na czas zimowy/letni). Sam zegar panelu
+  nie jest encją (zmienia się co sekundę i zaśmiecałby bazę HA) — jest w `piec/stan`
+  jako `zegar_panelu`.
 - **Binarne:** alarm (`problem`), pompy CO/CWU/mieszacza, zapalarka, wentylator,
   podajnik, podajnik 2, siłownik czyszczący.
 - **Diagnostyczne:** ramki/min, odrzucone ramki/min, wiek odczytu,
