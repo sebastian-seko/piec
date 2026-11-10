@@ -73,8 +73,10 @@ Opcje:
 |---|---|
 | `--wyslij` | naprawdę wyślij (wymaga `sudo` i wpisania `TAK`) |
 | `--kod N` | kod alarmu dla `kasuj` — musi zgadzać się z bieżącym alarmem |
-| `--jako panel` | domyślnie; nadaje jako panel ecoSTER (0x50) |
-| `--jako econet` | nadaje jako moduł ecoNET (0x56) — patrz niżej |
+| `--jako panel` | domyślnie; adres panelu (0x50), nadane w pustym okienku adresu 0x55 |
+| `--jako panel-po` | adres panelu, nadane zaraz po ramce prawdziwego panelu |
+| `--jako panel2` | adres 0x55 („drugi panel”) we własnym okienku |
+| `--jako econet` | adres modułu ecoNET (0x56) we własnym okienku |
 | `--obserwuj S` | maks. sekund obserwacji po wysłaniu (domyślnie 60) |
 | `--port P` | port szeregowy (domyślnie `/dev/ttyUSB0`) |
 
@@ -82,12 +84,21 @@ Opcje:
 
 | polecenie | wolno tylko gdy | limit |
 |---|---|---|
-| `wlacz` | stan WYŁĄCZONY i brak kodu alarmu | wspólny z `kasuj`: 1 na 30 min |
+| `wlacz` | stan WYŁĄCZONY albo WYGASZANIE, brak kodu alarmu | wspólny z `kasuj`: 1 na 30 min |
 | `wylacz` | ROZPALANIE, PRACA, POSTÓJ, PRACA RĘCZNA, CZYSZCZENIE | 1 na 2 min |
 | `kasuj` | ALARM z kodem = `--kod`, kod na liście `DOZWOLONE_KODY` (dziś: 32) | wspólny z `wlacz`: 1 na 30 min |
 
 Oraz zawsze, gdy: dane parsera są starsze niż 120 s, brak terminala (cron/skrypt),
 brak `sudo`, stan na magistrali różni się od tego z pliku, brak wolnego okienka w 10 s.
+
+Dodatkowo:
+
+- **Blokada po powtórnym alarmie:** jeśli w ostatnich 3 godzinach były 2 alarmy lub więcej
+  (liczone z plików parsera, także te skasowane z panelu), `wlacz` i `kasuj` odmawiają.
+  Drugi alarm z rzędu oznacza, że trzeba zajrzeć do palnika. `wylacz` działa zawsze.
+- **Limit liczy się tylko od wysyłki przyjętej przez piec** (odpowiedź `0xF1` albo zmiana
+  stanu). Próba, na którą piec nie odpowiedział, nie zużywa limitu — po 60 s można spróbować
+  innego wariantu `--jako`.
 
 Wspólny limit dla `wlacz` i `kasuj`: oba uruchamiają rozpalanie, więc nie da się
 zrobić „włącz, nie wyszło, kasuj, włącz…” w kółko.
@@ -119,21 +130,34 @@ Budowa ramki (pewne — zweryfikowane na 1097 ramkach z logu i ramkach panelu):
 |---|---|---|
 | `0x71 [1]` = włącz | 06.11.2026 16:27:38: WYŁĄCZONY → CZYSZCZENIE | pewne |
 | `0x71 [2]` = wyłącz | 06.11.2026 16:31:20: ROZPALANIE → WYGASZANIE | pewne |
-| `0x71 [3, kod, 0]` = kasuj alarm | 04.10.2026 01:17:11: koniec alarmu 32 w tej samej sekundzie | prawdopodobne (jedna obserwacja) |
+| `0x71 [3, kod, 0]` = kasuj alarm | 04.10.2026 01:17:11 i 10.11.2026 16:18:42: ALARM 32 → CZYSZCZENIE, potem rozpalanie | pewne (dwie obserwacje, ta sama ramka) |
 | odpowiedź pieca `0xF1` na każde `0x71` | wszystkie obserwacje | pewne |
 | nagłówek panelu `50 B0 07` | pełne ramki panelu z 06.11.2026 | pewne |
 | piec przyjmie ramkę od nas tak jak od panelu | — | **do sprawdzenia przy pierwszym użyciu** |
 | nagłówek ecoNET `56 30 07` | `30` z oryginalnego econetanalyze, `07` zgadnięte | niepewne |
 
 **Moment nadania.** RS-485 to jedna para przewodów; naraz może nadawać jedno
-urządzenie. Piec (0x45) jest masterem i ok. 1,2 razy na sekundę odpytuje kolejne adresy.
+urządzenie. Piec (0x45) jest masterem. Jego cykl (ok. 1,2 raza na sekundę), z logu:
 
-- `--jako panel`: prawdziwy panel odpowiada co cykl. Skrypt czeka, aż panel skończy
-  swoją ramkę, i nadaje zaraz po niej. Jeśli piec zacznie nadawać w tej samej chwili,
-  ramki się zderzą — wtedy skrypt zgłosi brak efektu (kod 7).
-- `--jako econet`: piec odpytuje adres 0x56 i nikt nie odpowiada — skrypt nadaje
-  w tym pustym okienku, więc kolizji nie ma. **Nie wiadomo**, czy piec przyjmie
-  polecenie od tego adresu.
+```
+45→51 (0x40) · 45→56 (0x30) · 45→55 (0x0A) · 45→00 (0x08 stan) · 45→50 (0x0A) · 50→00 (0x89 zegar)
+```
+
+Adresy 0x51, 0x55, 0x56 (oraz 0x57, 0x58) nie odpowiadają — po zapytaniu do nich jest
+puste okienko. Warianty `--jako`, w kolejności, w jakiej warto próbować:
+
+1. `panel` (domyślny): adres i nagłówek panelu, które piec na pewno przyjmuje, ale nadane
+   w pustym okienku adresu 0x55, więc bez kolizji. Niewiadoma: czy piec przyjmie ramkę
+   od 0x50 poza okienkiem panelu.
+2. `panel2`: adres 0x55. Piec odpytuje go tym samym zapytaniem 0x0A co panel, więc to
+   najpewniej miejsce na drugi panel. Niewiadoma: czy piec słucha poleceń spod tego adresu.
+3. `panel-po`: adres panelu, zaraz po jego ramce 0x89. Ryzyko: piec od razu wysyła
+   kolejne zapytanie i ramki się zderzą.
+4. `econet`: adres 0x56; nagłówek `30 07` jest zgadnięty.
+
+Nie wiemy, w którym miejscu cyklu prawdziwy panel wysyła polecenia (w logach nie ma
+kolejności ramek z tej chwili). Pierwsze użycie pokaże, który wariant działa — skrypt
+podpowiada kolejne, gdy piec nie odpowie.
 
 **Echo.** Wiele przejściówek USB-RS485 odbiera własną transmisję. `echo=True`
 oznacza, że bajty wyszły na magistralę — ale nie, że piec je przyjął. O tym mówi
@@ -144,7 +168,7 @@ oznacza, że bajty wyszły na magistralę — ale nie, że piec je przyjął. O 
 Skrypt nie ponawia. Kolejność sprawdzania (wynik jest w dzienniku):
 
 1. `echo=False` — przejściówka nie nadaje albo nie przełącza kierunku (potrzebna automatyczna obsługa DE/RE).
-2. `echo=True`, brak `0xF1` — kolizja albo piec nie akceptuje nadawcy. Po upływie limitu spróbuj ponownie albo `--jako econet`.
+2. `echo=True`, brak `0xF1` — piec nie przyjął ramki w tym wariancie. Po 60 s spróbuj kolejnego `--jako` (kolejność wyżej); taka próba nie zużywa limitu.
 3. Jest `0xF1`, ale stan bez zmian — polecenie przyjęte, ale nie zadziałało. Wykonaj to samo z panelu
    i porównaj w `/home/pi/piec_dane/polecenia.jsonl` pełną ramkę panelu z naszą.
 
@@ -156,8 +180,12 @@ Skrypt nie ponawia. Kolejność sprawdzania (wynik jest w dzienniku):
 | `/home/pi/piec_dane/polecenia.jsonl` | zapisywany przez usługę `piec`: każde polecenie z panelu i odpowiedź pieca, z pełną ramką i stanem przed/po |
 | `/home/pi/piec_dane/alarmy/alarm_*.json` | historia alarmów; `sposob_zakonczenia` mówi, czy alarm skasowano poleceniem |
 
-Polecenia wysłane tym skryptem **nie** trafią do `polecenia.jsonl` — na czas
-wysyłki parser jest zatrzymany. Są w `sterowanie.log`.
+Polecenia wysłane tym skryptem skrypt sam dopisuje do `polecenia.jsonl`
+(z `"zrodlo": "sterowanie.py"`), więc są w historii i idą na MQTT jako zdarzenie.
+Plik alarmu skasowanego tym skryptem będzie miał `koniec: przerwany (restart usługi)`,
+bo parser jest wtedy zatrzymany — właściwy wpis jest w `polecenia.jsonl` i `sterowanie.log`.
 
-Kody alarmów i opisy: `src/ecomax850p2.py` → `ALARM_KODY`. Dozwolone do kasowania:
+Kody alarmów i opisy: `src/ecomax850p2.py` → `ALARM_KODY` (maska bitowa wg instrukcji
+ecoMAX850P2-C: 2, 4, 8, 16, 32; kilka alarmów naraz daje sumę). Zdalnie kasować wolno tylko
+czyste 32 — alarmów przegrzania i czujników skrypt celowo nie kasuje. Dozwolone do kasowania:
 `narzedzia/sterowanie.py` → `DOZWOLONE_KODY`.

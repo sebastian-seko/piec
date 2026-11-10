@@ -29,22 +29,47 @@ ALARM_BUFOR = 200           # ile ostatnich innych ramek trzymac w pamieci
 ALARM_MAX_INNYCH = 500      # max roznych (unikalna tresc) innych ramek w pliku
 
 # --- Kody alarmow (bajt 196 ramki 0x08) ---------------------------------------
-# "potwierdzony": False = opis to wniosek z danych, nie tekst odczytany z panelu.
-# Po potwierdzeniu z panelu zmien na True. Nowe kody dopisuj tutaj.
+# Bajt 196 to MASKA BITOWA aktywnych alarmow - te same wartosci, co "kod sygnalizacji
+# alarmow" w instrukcji ecoMAX850P2-C (rozdz. 12.14): AL2=2, AL3=4, AL4=8, AL5=16, AL6=32.
+# Kilka alarmow naraz daje sume, np. 2+8 = 10.
+#   potwierdzony=True  - zaobserwowany na piecu (ramka + tekst z panelu)
+#   potwierdzony=False - opis z instrukcji; na ramce jeszcze nie widziany
+# AL1 (1) i AL7 (64) wystepuja w tabelach pokrewnych modeli, ale instrukcja 850P2-C
+# nie podaje ich znaczenia - zostawione jako nieznane.
 ALARM_KOD_BAJT = 196
 ALARM_KODY = {
-    # tekst z wyswietlacza panelu, potwierdzony przez uzytkownika przy alarmie 10.11.2026
+    2:  {"opis": "Przekroczenie temperatury kotła", "potwierdzony": False},
+    4:  {"opis": "Przekroczenie temperatury podajnika", "potwierdzony": False},
+    8:  {"opis": "Uszkodzenie czujnika temperatury kotła CO", "potwierdzony": False},
+    16: {"opis": "Uszkodzenie czujnika temperatury podajnika", "potwierdzony": False},
+    # tekst z wyswietlacza panelu, potwierdzony przy alarmie 10.11.2026 (instrukcja: AL6)
     32: {"opis": "Nieudana próba rozpalenia kotła", "potwierdzony": True},
 }
+
+
+def alarmy_z_maski(kod):
+    """Lista (wartosc_bitu, opis, potwierdzony) dla kazdego zapalonego bitu."""
+    out = []
+    for bit in range(8):
+        w = 1 << bit
+        if kod & w:
+            k = ALARM_KODY.get(w)
+            out.append((w, k["opis"] if k else f"Nieznany alarm (bit {w})", bool(k and k["potwierdzony"])))
+    return out
 
 
 def opis_alarmu(kod):
     if kod is None or kod == 0:
         return None
-    k = ALARM_KODY.get(kod)
-    if k is None:
-        return f"Nieznany alarm (kod {kod})"
-    return k["opis"] if k["potwierdzony"] else f"{k['opis']} (niepotwierdzone)"
+    return "; ".join(o if (potw or w not in ALARM_KODY) else f"{o} (wg instrukcji, niepotwierdzone)"
+                     for w, o, potw in alarmy_z_maski(kod))
+
+
+def alarm_potwierdzony(kod):
+    """True, gdy wszystkie aktywne alarmy maja potwierdzony opis; None bez alarmu."""
+    if not kod:
+        return None
+    return all(potw for _, _, potw in alarmy_z_maski(kod))
 
 
 # --- Polecenia i odpowiedzi (wszystko poza cyklicznym odpytywaniem) -----------
@@ -771,8 +796,7 @@ def parseFrame08(message):
             "aktywny": message[OPERATING_STATUS_byte] == ALARM_STAN,
             "kod": _bajt(message, ALARM_KOD_byte),
             "opis": opis_alarmu(_bajt(message, ALARM_KOD_byte)),
-            "opis_potwierdzony": (ALARM_KODY.get(_bajt(message, ALARM_KOD_byte), {}).get("potwierdzony")
-                                  if _bajt(message, ALARM_KOD_byte) else None),
+            "opis_potwierdzony": alarm_potwierdzony(_bajt(message, ALARM_KOD_byte)),
             "nieudane_proby_rozpalenia": _bajt(message, ALARM_FLAGA_byte),
             "bajt_198": _bajt(message, ALARM_FLAGA_byte),
             "wyjscia2": _bajt(message, OUTPUTS2_byte),

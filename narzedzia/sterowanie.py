@@ -5,7 +5,8 @@ Reczne sterowanie piecem ecoMAX 850P2 przez RS-485: wlacz / wylacz / kasuj alarm
 Wysyla dokladnie te same ramki, ktore wysyla panel ecoSTER (zaobserwowane):
   wlacz   0x71 [1]          68 0B 00 45 50 B0 07 71 01 B1 16   WYLACZONY -> CZYSZCZENIE
   wylacz  0x71 [2]          68 0B 00 45 50 B0 07 71 02 B2 16   ROZPALANIE -> WYGASZANIE
-  kasuj   0x71 [3, kod, 0]  68 0D 00 45 50 B0 07 71 03 20 00 95 16 (kod 32)
+  kasuj   0x71 [3, kod, 0]  68 0D 00 45 50 B0 07 71 03 20 00 95 16 (kod 32)  ALARM -> CZYSZCZENIE
+                            (zlapane z panelu 2 razy: 04.10 i 10.11.2026)
 
 NIC TUTAJ NIE URUCHAMIA SIE AUTOMATYCZNIE:
   * bez --wyslij skrypt tylko pokazuje stan i co by zrobil (nie dotyka portu ani uslugi),
@@ -52,8 +53,8 @@ DOZWOLONE_KODY = {32}      # kody alarmow, ktore wolno kasowac (32 = nieudane ro
 POLECENIA = {
     "wlacz": {
         "dane": lambda kod: [1],
-        "dozwolone_stany": {WYL},
-        "sukces": lambda st: st not in (WYL, ALARM),
+        "dozwolone_stany": {WYL, WYGAS},      # z WYGASZANIA panel tez wlacza (06.11.2026 16:32)
+        "sukces": lambda st: st not in (WYL, WYGAS, ALARM),
         "grupa": "rozpalanie", "limit_min": 30,
         "ostrzezenie": "Włączenie uruchamia czyszczenie i ROZPALANIE.\n"
                        "Upewnij się, że w zasobniku jest pellet, a palnik nie jest zalany niespalonym paliwem.",
@@ -70,19 +71,35 @@ POLECENIA = {
         "dozwolone_stany": {ALARM},
         "sukces": lambda st: st != ALARM,
         "grupa": "rozpalanie", "limit_min": 30,
-        "ostrzezenie": "Skasowanie alarmu nieudanego rozpalenia = KOLEJNA PRÓBA ROZPALENIA,\n"
+        "ostrzezenie": "Alarm 32 = „Nieudana próba rozpalenia kotła”. Skasowanie = KOLEJNE ROZPALANIE\n"
+                       "(do 3 prób po ok. 6,5 min, przy każdej dawka paliwa),\n"
                        "często z pelletem, który już leży w palniku. Po drugim nieudanym rozpaleniu idź do kotła.",
     },
 }
 
-# Pod jakim adresem nadajemy i kiedy (patrz README):
-#   panel  - naglowek potwierdzony ramkami panelu (B0 07); nadajemy zaraz PO
-#            odpowiedzi prawdziwego panelu, zeby nie nadawac jednoczesnie z nim
-#   econet - pusty adres 0x56, nadajemy w jego okienku; naglowek 30 07 zgadniety
+# Pod jakim adresem nadajemy i w ktorym okienku (patrz README).
+# Cykl pieca (z logu, ok. 1,2 raza na sekunde):
+#   45>51:40, [45>57:40, 45>58:40 co 4. cykl], 45>56:30, 45>55:0A, 45>00:08, 45>50:0A, 50>00:89
+# Po zapytaniu do nieobecnego adresu (0x51, 0x55, 0x56...) piec czeka chwile na odpowiedz -
+# to jest puste okienko, w ktorym nikt inny nie nadaje.
+#   panel    - adres i naglowek panelu (potwierdzone, piec przyjmuje od niego 0x71), nadane
+#              w pustym okienku adresu 0x55 -> bez kolizji z prawdziwym panelem. DOMYSLNE.
+#   panel-po - jak panel, ale zaraz PO ramce prawdziwego panelu (ryzyko kolizji z pieciem)
+#   panel2   - adres 0x55 (piec odpytuje go tym samym 0x0A co panel - pewnie "drugi panel"),
+#              we wlasnym okienku; naglowek jak panel
+#   econet   - adres 0x56 we wlasnym okienku; naglowek 30 07 zgadniety
+# "okienko" = adres, po zapytaniu do ktorego nadajemy; None = po ramce OD naszego adresu.
 TOZSAMOSCI = {
-    "panel":  {"adres": 0x50, "typ_nadawcy": 0xB0, "wersja": 0x07, "moment": "po_ramce_od_adresu"},
-    "econet": {"adres": 0x56, "typ_nadawcy": 0x30, "wersja": 0x07, "moment": "po_zapytaniu_do_adresu"},
+    "panel":    {"adres": 0x50, "typ_nadawcy": 0xB0, "wersja": 0x07, "okienko": 0x55},
+    "panel-po": {"adres": 0x50, "typ_nadawcy": 0xB0, "wersja": 0x07, "okienko": None},
+    "panel2":   {"adres": 0x55, "typ_nadawcy": 0xB0, "wersja": 0x07, "okienko": 0x55},
+    "econet":   {"adres": 0x56, "typ_nadawcy": 0x30, "wersja": 0x07, "okienko": 0x56},
 }
+MIN_ODSTEP_S = 60            # min. odstep miedzy dowolnymi wysylkami (takze nieprzyjetymi)
+ALARMY = "/home/pi/piec_dane/alarmy"
+POLECENIA_PLIK = "/home/pi/piec_dane/polecenia.jsonl"
+ALARMY_OKNO_H = 3            # ile godzin wstecz liczymy alarmy
+ALARMY_MAX = 1               # przy wiekszej liczbie alarmow w oknie: odmowa wlacz/kasuj
 START, STOP = 0x68, 0x16
 
 
@@ -188,19 +205,74 @@ def loguj(tekst):
         print(f"(nie udało się zapisać dziennika {DZIENNIK}: {e})")
 
 
-def ostatnia_wysylka(grupa):
-    """Czas ostatniej wysylki z danej grupy limitu (z dziennika)."""
+def ostatnie_wysylki(grupa):
+    """(czas ostatniej PRZYJETEJ wysylki z grupy, czas ostatniej jakiejkolwiek wysylki).
+    Przyjeta = piec odpowiedzial 0xF1 albo zmienil stan. Wysylka bez wpisu WYNIK
+    (np. przerwana) liczy sie ostroznie jako przyjeta."""
+    przyjeta = dowolna = None
+    oczekuje = None          # (czas, grupa) WYSLANO bez WYNIK
     try:
         with open(DZIENNIK, encoding="utf-8") as f:
-            linie = [l for l in f if f" WYSLANO grupa={grupa} " in l]
+            for l in f:
+                try:
+                    t = datetime.fromisoformat(l.split(" ", 1)[0])
+                except ValueError:
+                    continue
+                if " WYSLANO grupa=" in l:
+                    if oczekuje and oczekuje[1] == grupa:
+                        przyjeta = oczekuje[0]
+                    oczekuje = (t, l.split(" WYSLANO grupa=", 1)[1].split(" ", 1)[0])
+                    dowolna = t
+                elif " WYNIK " in l and oczekuje:
+                    if oczekuje[1] == grupa and "przyjete=False" not in l:
+                        przyjeta = oczekuje[0]
+                    oczekuje = None
     except FileNotFoundError:
-        return None
-    if not linie:
-        return None
+        return None, None
+    if oczekuje and oczekuje[1] == grupa:
+        przyjeta = oczekuje[0]
+    return przyjeta, dowolna
+
+
+def alarmy_w_oknie():
+    """Liczba alarmow (plikow parsera) z ostatnich ALARMY_OKNO_H godzin."""
+    n = 0
     try:
-        return datetime.fromisoformat(linie[-1].split(" ", 1)[0])
-    except ValueError:
-        return None
+        pliki = [x for x in os.listdir(ALARMY) if x.startswith("alarm_") and x.endswith(".json")]
+    except OSError:
+        return 0
+    for x in pliki:
+        try:
+            t = datetime.strptime(x[6:25], "%Y-%m-%d_%H-%M-%S")
+        except ValueError:
+            continue
+        if 0 <= (datetime.now() - t).total_seconds() <= ALARMY_OKNO_H * 3600:
+            n += 1
+    return n
+
+
+def dopisz_polecenie(polecenie, jako, ramka, stan_przed, kod_przed, wynik):
+    """Wpis do polecenia.jsonl parsera - zeby wysylka byla w historii i poszla na MQTT
+    (parser jest w tym czasie zatrzymany i sam jej nie zobaczy)."""
+    opisy = {"wlacz": ("włączenie pieca (sterowanie.py)", "wlaczenie"),
+             "wylacz": ("wyłączenie pieca (sterowanie.py)", "wylaczenie"),
+             "kasuj": (f"kasowanie alarmu {kod_przed} (sterowanie.py)", "kasowanie_alarmu")}
+    stan_po = wynik["stany"][-1] if wynik["stany"] else (None, None)
+    rek = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "nadawca": f"0x{ramka[4]:02X}", "odbiorca": f"0x{ramka[3]:02X}", "typ": f"0x{ramka[7]:02X}",
+        "rodzaj": opisy[polecenie][1], "opis": opisy[polecenie][0],
+        "zrodlo": "sterowanie.py", "jako": jako,
+        "echo": wynik["echo"], "odpowiedz_f1": wynik["odpowiedz_f1"], "sukces": wynik["sukces"],
+        "stan_przed": nazwa(stan_przed), "alarm_kod_przed": kod_przed,
+        "stan_po": nazwa(stan_po[0]) if stan_po[0] is not None else None, "alarm_kod_po": stan_po[1],
+        "ramka": ramka[7:-2], "ramka_pelna": ramka,
+    }
+    try:
+        with open(POLECENIA_PLIK, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rek, ensure_ascii=False) + "\n")
+    except OSError as e:
+        print(f"(nie udało się dopisać do {POLECENIA_PLIK}: {e})")
 
 
 def stan_z_pliku():
@@ -237,16 +309,17 @@ def czekaj_na_moment(czytnik, toz, timeout):
         r = czytnik.nastepna(koniec - time.monotonic())
         if r is None:
             break
-        if toz["moment"] == "po_zapytaniu_do_adresu" and r[4] == ADRES_PIECA and r[3] == toz["adres"]:
+        if toz["okienko"] is not None and r[4] == ADRES_PIECA and r[3] == toz["okienko"]:
             return True
-        if toz["moment"] == "po_ramce_od_adresu" and r[4] == toz["adres"]:
+        if toz["okienko"] is None and r[4] == toz["adres"]:
             return True
     return False
 
 
 def obserwuj(czytnik, nasza, sekundy, sukces):
     wynik = {"echo": False, "odpowiedz_f1": False, "stany": [], "sukces": False}
-    koniec = time.monotonic() + sekundy
+    start = time.monotonic()
+    koniec = start + sekundy
     while time.monotonic() < koniec:
         r = czytnik.nastepna(koniec - time.monotonic())
         if r is None:
@@ -254,6 +327,9 @@ def obserwuj(czytnik, nasza, sekundy, sukces):
         if r == nasza:
             wynik["echo"] = True
             continue
+        # piec odpowiada 0xF1 w tej samej sekundzie; brak odpowiedzi po 10 s = nie przyjal
+        if not wynik["odpowiedz_f1"] and time.monotonic() - start > 10:
+            break
         if r[4] == ADRES_PIECA and r[7] == TYP_ODPOWIEDZI:
             wynik["odpowiedz_f1"] = True
             print(f"  <- odpowiedź pieca 0xF1: {hexy(r)}")
@@ -321,10 +397,20 @@ def main(argv=None):
         print(odmowa + " Nic nie wysyłam.")
         return 3
 
-    ost = ostatnia_wysylka(p["grupa"])
-    if ost is not None and (datetime.now() - ost).total_seconds() < p["limit_min"] * 60:
-        print(f"Ostatnia wysyłka z grupy '{p['grupa']}': {ost}. "
+    if p["grupa"] == "rozpalanie":
+        n = alarmy_w_oknie()
+        if n > ALARMY_MAX:
+            print(f"W ostatnich {ALARMY_OKNO_H} h było {n} alarmów. Kolejne zdalne rozpalanie "
+                  "jest zablokowane - trzeba sprawdzić palnik przy kotle. Nic nie wysyłam.")
+            return 4
+
+    przyjeta, dowolna = ostatnie_wysylki(p["grupa"])
+    if przyjeta is not None and (datetime.now() - przyjeta).total_seconds() < p["limit_min"] * 60:
+        print(f"Ostatnia przyjęta wysyłka z grupy '{p['grupa']}': {przyjeta}. "
               f"Limit: jedna na {p['limit_min']} min. Przerywam.")
+        return 4
+    if dowolna is not None and (datetime.now() - dowolna).total_seconds() < MIN_ODSTEP_S:
+        print(f"Ostatnia wysyłka: {dowolna}. Odczekaj {MIN_ODSTEP_S} s między próbami. Przerywam.")
         return 4
 
     if not a.wyslij:
@@ -380,12 +466,20 @@ def main(argv=None):
 
         print(f"Obserwuję magistralę (maks. {a.obserwuj} s)...")
         w = obserwuj(czytnik, ramka, a.obserwuj, p["sukces"])
+        przyjete = w["odpowiedz_f1"] or w["sukces"]
         loguj(f"WYNIK polecenie={a.polecenie} echo={w['echo']} odpowiedz_F1={w['odpowiedz_f1']} "
-              f"stany={[(nazwa(s), k) for s, k in w['stany']]} sukces={w['sukces']}")
+              f"stany={[(nazwa(s), k) for s, k in w['stany']]} sukces={w['sukces']} przyjete={przyjete}")
+        dopisz_polecenie(a.polecenie, a.jako, ramka, stan, kod, w)
         if w["sukces"]:
             print(f"\nOK: '{a.polecenie}' przyjęte, piec: {nazwa(w['stany'][-1][0])}.")
             return 0
-        print(f"\nBrak oczekiwanej zmiany stanu po '{a.polecenie}'. NIE ponawiam - sprawdź README.")
+        if not przyjete:
+            inne = [k for k in TOZSAMOSCI if k != a.jako]
+            print(f"\nPiec nie odpowiedział na '{a.polecenie}' (echo={w['echo']}). Nie ponawiam sam.\n"
+                  f"Ta próba nie zużywa limitu - po {MIN_ODSTEP_S} s możesz spróbować innego wariantu: "
+                  + ", ".join(f"--jako {k}" for k in inne))
+            return 7
+        print(f"\nPiec potwierdził '{a.polecenie}' (0xF1), ale stan się nie zmienił. NIE ponawiam - sprawdź README.")
         return 7
     finally:
         if port is not None:

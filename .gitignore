@@ -28,3 +28,7 @@ __pycache__/
 # Konfiguracja MQTT z haslem - prawdziwy plik jest w /home/pi/mqtt.ini, nie w repo
 mqtt.ini
 config/mqtt.ini
+
+# Kopie danych z pieca (alarmy, polecenia) - nie do repo
+piec_dane/
+zrzuty/
