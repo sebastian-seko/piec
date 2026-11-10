@@ -43,7 +43,7 @@ Przerwa w odczytach (HA, alarmy) trwa zwykle 15–40 s.
 
 `wlacz` i `kasuj` uruchamiają **rozpalanie**, gdy nikt nie stoi przy kotle.
 
-- Alarm 32 to najpewniej **nieudane rozpalenie**. Skasowanie = kolejna próba, często
+- Alarm 32 to **„Nieudana próba rozpalenia kotła”** (tekst z panelu, potwierdzony 10.11.2026). Skasowanie = kolejna próba, często
   z pelletem, który już leży w palniku. W złym scenariuszu: dużo dymu albo zapłon
   nagromadzonych gazów w komorze. Po drugim nieudanym rozpaleniu idź do kotła.
 - Zdalnie włączaj tylko, jeśli wiesz, w jakim stanie jest kocioł (pellet w zasobniku,

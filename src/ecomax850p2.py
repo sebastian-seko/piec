@@ -33,7 +33,8 @@ ALARM_MAX_INNYCH = 500      # max roznych (unikalna tresc) innych ramek w pliku
 # Po potwierdzeniu z panelu zmien na True. Nowe kody dopisuj tutaj.
 ALARM_KOD_BAJT = 196
 ALARM_KODY = {
-    32: {"opis": "Nieudane rozpalenie", "potwierdzony": False},
+    # tekst z wyswietlacza panelu, potwierdzony przez uzytkownika przy alarmie 10.11.2026
+    32: {"opis": "Nieudana próba rozpalenia kotła", "potwierdzony": True},
 }
 
 
@@ -75,6 +76,29 @@ PARAMETRY_NAZWY = {
     68: {"nazwa": "Temperatura zadana mieszacza",
          "zrodlo": "zmiany z panelu 06.11.2026: 25 -> 30 -> 35; HA zadana_mieszacza = 35, w X.2026 obie = 45"},
 }
+
+
+# Po wlaczeniu zasilania panel i piec wymieniaja dane identyfikacyjne.
+OPISY_STARTOWE = {
+    0x39: "zapytanie o identyfikator sterownika",
+    0xB9: "identyfikator sterownika",                 # zawiera m.in. "ecoMAX850P2-H"
+    0x62: "zapytanie o nazwę palnika",
+    0xE2: "nazwa palnika i jego nastawy",             # "Palniki|DasPell GL 20|P2 #2|..."
+    0x63: "zapytanie 0x63 (nieznane)",
+    0xE3: "odpowiedź 0xE3 (nieznane, 22 bajty)",
+    0x64: "zapytanie 0x64 (nieznane)",
+    0xE4: "odpowiedź 0xE4 (nieznane, wygląda na maski bitowe)",
+    0xC0: "wersja oprogramowania panelu",             # odpowiedz panelu na 0x40 pieca
+    0xE0: "ramka 0xE0 od adresu 0xED przy starcie (nieznane)",
+}
+
+# Naglowek ramki 0x08 (bajty 5..26) to tabela "wersji danych": bajt 5 = liczba wpisow (7),
+# potem trojki [typ ramki, wersja L, wersja H]. Piec podbija wersje, gdy dane sie zmienia,
+# a panel wtedy pobiera je odpowiednia ramka. Rozpoznane:
+#   bajty 12-14: typ 0x61 = tabela parametrow (wersja rosnie po kazdej zmianie nastawy)
+#   bajty 15-17: typ 0x3D = lista alarmow (wersja rosnie przy nowym alarmie; zeruje sie
+#                po wylaczeniu zasilania - dlatego NIE jest to licznik alarmow)
+# Bajt 26 to starszy bajt wersji typu 0x40, a nie poziom paliwa (wczesniejsza hipoteza).
 
 
 def nazwa_parametru(nr):
@@ -136,6 +160,10 @@ def dekoduj_polecenie(typ, message):
         if len(dane) >= 2 and len(dane) == 2 + 3 * dane[0]:
             return f"tabela parametrów: {dane[0]} pozycji od nr {dane[1]}", "tabela_parametrow"
         return f"tabela parametrów 0xE1 - nieznany układ ({len(dane)} B)", "tabela_parametrow"
+    # Ramki wymieniane po wlaczeniu zasilania sterownika (zlapane 10.11.2026):
+    if typ in OPISY_STARTOWE:
+        tekst = "".join(chr(x) for x in dane if 32 <= x < 127)
+        return f"{OPISY_STARTOWE[typ]}" + (f": {tekst[:60]}" if typ in (0xC0, 0xE2, 0xB9) and tekst else ""), "start_sterownika"
     if typ >= 0x80:
         return f"odpowiedź pieca typ 0x{typ:02X} (na 0x{typ - 0x80:02X}) {dane[:20]}", "odpowiedz"
     return f"typ 0x{typ:02X} {dane[:20]}", "nieznane"
@@ -561,9 +589,16 @@ def parseFrame08(message):
     IGNITIONS_short = 263
     AIRFLOW_percent_byte = 245
     OUTPUTS_byte = 28   # bitowa mapa stanow wyjsc (bit7..bit0)
-    OUTPUTS2_byte = 29       # prawdopodobnie drugi bajt wyjsc (niepotwierdzone)
-    ALARM_KOD_byte = 196     # kandydat na kod/flage alarmu (niepotwierdzone)
-    ALARM_FLAGA_byte = 198   # zmienia sie przy alarmie (niepotwierdzone)
+    # Bajt 29 - drugi bajt wyjsc. Z historii HA z 10.11.2026 (setki zmian, zawsze zgodne
+    # z bajtem 227): bit0 = mieszacz OTWIERA, bit1 = mieszacz ZAMYKA.
+    # bit2 = wlaczony zawsze poza ALARMEM (znaczenie nieznane).
+    OUTPUTS2_byte = 29
+    ALARM_KOD_byte = 196     # kod alarmu (32 potwierdzone 3 alarmami i poleceniem kasowania z panelu)
+    # Bajt 198 - licznik NIEUDANYCH PROB w biezacym rozpalaniu (nie flaga alarmu):
+    # rosnie co ok. 6,5 min bez plomienia (0 -> 1 -> 2, przy kazdej dawka paliwa),
+    # po trzeciej nieudanej probie (ok. 20 min) piec wchodzi w ALARM 32 i licznik wraca do 0.
+    # Po udanym rozpaleniu zostaje do nastepnego rozpalania (np. 1 = udalo sie za 2. razem).
+    ALARM_FLAGA_byte = 198
     MIXER_SET_STATUS_byte = 227
     MIXER_STATUSES = {0: "STOP", 1: "ZAMYKANIE", 2: "OTWIERANIE"}
 
@@ -729,7 +764,7 @@ def parseFrame08(message):
             "podajnik": feeder == "ON",
             "wentylator": fan == "ON",
         },
-        # Surowe bajty zwiazane z alarmem (znaczenie jeszcze nie potwierdzone).
+        # Alarm i rozpalanie. "bajt_198" zostaje dla zgodnosci = nieudane_proby_rozpalenia.
         # Z logu 27.12.2024: przy alarmie po nieudanym rozpaleniu b196: 0->32,
         # b198: 2->0, b29: 4->2. Zbieramy, zeby zbudowac mape kod -> opis.
         "alarm": {
@@ -738,6 +773,7 @@ def parseFrame08(message):
             "opis": opis_alarmu(_bajt(message, ALARM_KOD_byte)),
             "opis_potwierdzony": (ALARM_KODY.get(_bajt(message, ALARM_KOD_byte), {}).get("potwierdzony")
                                   if _bajt(message, ALARM_KOD_byte) else None),
+            "nieudane_proby_rozpalenia": _bajt(message, ALARM_FLAGA_byte),
             "bajt_198": _bajt(message, ALARM_FLAGA_byte),
             "wyjscia2": _bajt(message, OUTPUTS2_byte),
             "wyjscia2_bity": f"{_bajt(message, OUTPUTS2_byte):08b}" if _bajt(message, OUTPUTS2_byte) is not None else None,

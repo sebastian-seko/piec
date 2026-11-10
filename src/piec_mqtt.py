@@ -91,6 +91,7 @@ def plaski_stan(d):
         "podajnik": w["podajnik"], "wentylator": w["wentylator"],
         "alarm": bool(a.get("aktywny")), "alarm_kod": a.get("kod"),
         "alarm_opis": a.get("opis"), "alarm_bajt_198": a.get("bajt_198"),
+        "nieudane_proby_rozpalenia": a.get("nieudane_proby_rozpalenia", a.get("bajt_198")),
         "wyjscia2": a.get("wyjscia2"),
         "zegar_panelu": pz.get("zegar"),
         "odchylka_zegara_s": pz.get("odchylka_s"),
@@ -173,14 +174,16 @@ SENSORY = [
     ("odczyt", "Ostatni odczyt", {"device_class": "timestamp"}),
     ("odchylka_zegara_s", "Odchyłka zegara panelu", {"unit_of_measurement": "s", "state_class": "measurement",
                                                      "icon": "mdi:clock-alert-outline"}),
-    ("alarm_bajt_198", "Alarm bajt 198", {**DIAGN, "icon": "mdi:bug-outline"}),
+    ("nieudane_proby_rozpalenia", "Nieudane próby rozpalenia", {"state_class": "measurement", "icon": "mdi:fire-alert"}),
+    # bajt 29: bit0 mieszacz otwiera, bit1 zamyka, bit2 = wlaczony poza alarmem (nieznane)
     ("wyjscia2", "Wyjścia (bajt 29)", {**DIAGN, "icon": "mdi:bug-outline"}),
 ]
 # Encje kiedys ogloszone, a dzis niepotrzebne - przy kazdym polaczeniu wysylamy pusta
 # konfiguracje, zeby HA je usunal (gdyby zdazyly powstac).
 # zegar_panelu: zmienia sie co sekunde, zasmiecalby baze HA; wystarczy odchylka.
 # Sam zegar zostaje w piec/stan (JSON), all.php i odczyty.json.
-USUNIETE = [("sensor", "zegar_panelu")]
+# alarm_bajt_198: zastapiony encja "Nieudane próby rozpalenia" (to samo pole, wlasciwa nazwa)
+USUNIETE = [("sensor", "zegar_panelu"), ("sensor", "alarm_bajt_198")]
 
 BINARNE = [
     ("alarm", "Alarm", {"device_class": "problem"}),
@@ -296,7 +299,7 @@ class Publikator:
     # --- discovery ---
     def discovery(self):
         dev = {"identifiers": [self.uid], "name": "Piec Kpol",
-               "manufacturer": "Plum", "model": "ecoMAX 850P2 (odczyt RS-485)"}
+               "manufacturer": "Plum", "model": "ecoMAX850P2-H, palnik DasPell GL 20 (odczyt RS-485)"}
         # odczyty: dostepne, gdy publikator polaczony I dane swieze;
         # diagnostyka: wystarczy polaczenie (ma pokazac, DLACZEGO dane sa stare)
         dost_polaczenie = {"topic": self.t_polaczenie}
